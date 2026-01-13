@@ -10,7 +10,7 @@ A single bash script to help maintain your AppImages. Organizes apps in `~/Apps/
 
 ## Quickstart
 
-Download and install direcly from the repo (if you trust me...):
+Download and install directly from the repo (if you trust me...):
 
 ```bash
 mkdir -p ~/.local/bin
@@ -18,10 +18,8 @@ curl -o ~/.local/bin/appi https://raw.githubusercontent.com/RavioliSauce/appi/re
 chmod +x ~/.local/bin/appi
 ```
 
-```bash
-appi install ~/Downloads/Obsidian-1.5.12.AppImage --id obsidian
-appi run obsidian
-```
+(or just copy the text in appi.sh and paste it into ~/.local/bin/appi using nano or any other text editor.)
+
 
 ## Advanced manual
 
