@@ -18,7 +18,7 @@ curl -o ~/.local/bin/appi https://raw.githubusercontent.com/RavioliSauce/appi/re
 chmod +x ~/.local/bin/appi
 ```
 
-(or just copy the text in appi.sh and paste it into ~/.local/bin/appi using nano or any other text editor.)
+(or just copy the text in `appi.sh` and paste it into ~/.local/bin/appi using nano or any other text editor.)
 
 
 ## Advanced manual
