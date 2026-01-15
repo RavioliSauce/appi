@@ -979,6 +979,9 @@ cmd_uninstall() {
     fi
   else
     log "Uninstalled integration (kept files): $id"
+    if [[ -d "$app_dir" ]]; then
+      echo "$app_dir still exists, if you want to delete everything run: $PROG uninstall $id --purge"
+    fi
   fi
 }
 
