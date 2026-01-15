@@ -99,6 +99,10 @@ This extracts the AppImage to `~/Apps/<app_id>/extracted/` so it can run without
 
 **Fix Chrome/Electron sandbox (requires sudo):**
 
+Ubuntu 23.10+ restricts unprivileged user namespaces by default (`kernel.unprivileged_userns_clone=0`), which prevents Chromium/Electron apps from using their default sandbox. As a workaround, these apps must use the legacy SUID sandbox instead. The `chrome-sandbox` binary needs root ownership and SUID bit (4755) to function.
+
+**Note:** Alternatively, you can enable unprivileged user namespaces system-wide by setting `kernel.unprivileged_userns_clone=1` via sysctl (requires root), but this reduces system security. The `--chrome-sandbox` fix is a safer per-app workaround.
+
 ```bash
 appi fix obsidian --chrome-sandbox
 ```
