@@ -41,7 +41,7 @@ You can install from a local file or download directly from a URL:
 
 ```bash
 # Install from local file
-appi install ~/Downloads/GIMP-3.08.AppImage --id gimp-3.08
+appi install ~/Downloads/GIMP-3.08.AppImage --id gimp
 
 # Install directly from URL
 appi install https://example.com/app.AppImage --id myapp
@@ -59,8 +59,8 @@ appi list
 #### Switch to a different version
 
 ```bash
-appi switch gimp-3.08 GIMP-3.08.AppImage
-appi switch gimp-3.08 3.08  # partial match works too
+appi switch gimp GIMP-3.08.AppImage
+appi switch gimp 3.08  # partial match works too
 ```
 
 If the app was extracted (via `appi fix --extract`), the extracted version is automatically updated to match.
@@ -68,7 +68,7 @@ If the app was extracted (via `appi fix --extract`), the extracted version is au
 #### View app info
 
 ```bash
-appi info gimp-3.08
+appi info gimp
 ```
 
 Shows detailed information about an installed app:
@@ -82,27 +82,27 @@ Shows detailed information about an installed app:
 #### Run an app by stable ID
 
 ```bash
-appi run gimp-3.08  # (or just `gimp-3.08` if ~/.local/bin is on PATH)
+appi run gimp  # (or just `gimp` if ~/.local/bin is on PATH)
 ```
 
 #### Refresh desktop entry / icon
 
 ```bash
-appi refresh gimp-3.08
+appi refresh gimp
 appi refresh        # refresh all
-appi refresh gimp-3.08 --source-url https://example.com/new-url  # update source URL
+appi refresh gimp --source-url https://example.com/new-url  # update source URL
 ```
 
 #### Uninstall (keep versions by default)
 
 ```bash
-appi uninstall gimp-3.08
+appi uninstall gimp
 ```
 
 #### Purge everything for an app
 
 ```bash
-appi uninstall gimp-3.08 --purge
+appi uninstall gimp --purge
 ```
 
 #### Clean old versions
@@ -110,14 +110,14 @@ appi uninstall gimp-3.08 --purge
 Remove old versions from `versions/` directory, keeping only the current one:
 
 ```bash
-appi clean gimp-3.08
+appi clean gimp
 appi clean        # clean all apps
 ```
 
 Remove a specific version (must not be current):
 
 ```bash
-appi clean gimp-3.08 GIMP-3.08.AppImage
+appi clean gimp GIMP-3.08.AppImage
 ```
 
 This removes AppImage files in `versions/` and updates the checksum database to remove entries for deleted files.
@@ -129,7 +129,7 @@ The `update` command can update individual apps, all apps, or appi itself.
 **Update a specific app:**
 
 ```bash
-appi update gimp-3.08
+appi update gimp
 ```
 
 The update command uses the following resolution chain:
@@ -161,7 +161,7 @@ Downloads and installs the latest version of `appi` from GitHub, replacing the c
 **Force re-download:**
 
 ```bash
-appi update gimp-3.08 --force
+appi update gimp --force
 ```
 
 Re-downloads and installs even if the checksum matches the current version.
@@ -187,7 +187,7 @@ When installing from a GitHub URL, appi automatically detects it and can use the
 
 ```bash
 export GITHUB_TOKEN=your_token_here
-appi update gimp-3.08
+appi update gimp
 ```
 
 **Note:** The script must be writable for self-update to succeed. If installed in a system directory, you may need to use `sudo`.
@@ -199,7 +199,7 @@ Use the `fix` command to extract the AppImage and fix compatibility issues:
 **Extract AppImage (no FUSE required):**
 
 ```bash
-appi fix gimp-3.08 --extract
+appi fix gimp --extract
 ```
 
 This extracts the AppImage to `~/Apps/<app_id>/extracted/` so it can run without FUSE. No sudo required.
@@ -211,7 +211,7 @@ Ubuntu 23.10+ restricts unprivileged user namespaces by default (`kernel.unprivi
 **Note:** Alternatively, you can enable unprivileged user namespaces system-wide by setting `kernel.unprivileged_userns_clone=1` via sysctl (requires root), but this reduces system security. The `--chrome-sandbox` fix is a safer per-app workaround.
 
 ```bash
-appi fix gimp-3.08 --chrome-sandbox
+appi fix gimp --chrome-sandbox
 ```
 
 This will:
@@ -223,7 +223,7 @@ This will:
 **Revert to AppImage:**
 
 ```bash
-appi fix gimp-3.08 --revert
+appi fix gimp --revert
 ```
 
 Removes the extracted version and reverts to using the AppImage directly.
