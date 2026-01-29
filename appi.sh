@@ -1115,26 +1115,26 @@ $(color_cyan "OPTIONS:")
 
 $(color_cyan "EXAMPLES:")
   (GIMP 3.08 is an open-source image editor, used here only as an example. Check it out, it's great.)
-  $PROG $(color_green "install") ~/Downloads/GIMP-3.08.AppImage $(color_yellow "--id") gimp-3.08
+  $PROG $(color_green "install") ~/Downloads/GIMP-3.08.AppImage $(color_yellow "--id") gimp
   $PROG $(color_green "install") https://example.com/app.AppImage $(color_yellow "--id") myapp
   $PROG $(color_green "list")
-  $PROG $(color_green "info") gimp-3.08
-  $PROG $(color_green "switch") gimp-3.08 GIMP-3.08.AppImage
-  $PROG $(color_green "run") gimp-3.08 (or just "gimp-3.08" if ~/.local/bin is on PATH)
-  $PROG $(color_green "refresh") gimp-3.08
-  $PROG $(color_green "fix") gimp-3.08 $(color_yellow "--extract")
-  $PROG $(color_green "fix") gimp-3.08 $(color_yellow "--chrome-sandbox")
-  $PROG $(color_green "fix") gimp-3.08 $(color_yellow "--revert")
+  $PROG $(color_green "info") gimp
+  $PROG $(color_green "switch") gimp GIMP-3.08.AppImage
+  $PROG $(color_green "run") gimp (or just "gimp" if ~/.local/bin is on PATH)
+  $PROG $(color_green "refresh") gimp
+  $PROG $(color_green "fix") gimp $(color_yellow "--extract")
+  $PROG $(color_green "fix") gimp $(color_yellow "--chrome-sandbox")
+  $PROG $(color_green "fix") gimp $(color_yellow "--revert")
   $PROG $(color_green "fix") $(color_yellow "--check")
-  $PROG $(color_green "fix") $(color_yellow "--check") gimp-3.08
+  $PROG $(color_green "fix") $(color_yellow "--check") gimp
   $PROG $(color_green "size")
-  $PROG $(color_green "size") gimp-3.08
-  $PROG $(color_green "uninstall") gimp-3.08
-  $PROG $(color_green "uninstall") gimp-3.08 $(color_yellow "--purge")
-  $PROG $(color_green "clean") gimp-3.08
-  $PROG $(color_green "clean") gimp-3.08 GIMP-3.08.AppImage
+  $PROG $(color_green "size") gimp
+  $PROG $(color_green "uninstall") gimp
+  $PROG $(color_green "uninstall") gimp $(color_yellow "--purge")
+  $PROG $(color_green "clean") gimp
+  $PROG $(color_green "clean") gimp GIMP-3.08.AppImage
   $PROG $(color_green "clean")
-  $PROG $(color_green "update") gimp-3.08
+  $PROG $(color_green "update") gimp
   $PROG $(color_green "update") $(color_yellow "--all")
   $PROG $(color_green "update") $(color_yellow "--self")
 EOF
