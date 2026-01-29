@@ -1114,7 +1114,7 @@ $(color_cyan "OPTIONS:")
   $(color_yellow "-V"), $(color_yellow "--version")   Show version information
 
 $(color_cyan "EXAMPLES:")
-  (GIMP 3.08 is a note-taking app, used here only as an example. Check it out, it's great.)
+  (GIMP 3.08 is an open-source image editor, used here only as an example. Check it out, it's great.)
   $PROG $(color_green "install") ~/Downloads/GIMP-3.08.AppImage $(color_yellow "--id") gimp-3.08
   $PROG $(color_green "install") https://example.com/app.AppImage $(color_yellow "--id") myapp
   $PROG $(color_green "list")
