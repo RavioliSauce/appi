@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -132,18 +132,18 @@ is_appimage_arch_compatible() {
   local system_arch
   system_arch="$(get_system_arch)"
   local filename_lower="${filename,,}"
-  
+
   # Define architecture patterns to look for in filenames
   # These are common naming conventions used in AppImage releases
   local -a x86_64_patterns=("x86_64" "x86-64" "amd64" "linux64" "-64bit")
   local -a aarch64_patterns=("aarch64" "arm64" "armv8")
   local -a armhf_patterns=("armhf" "armv7" "arm32")
   local -a i686_patterns=("i686" "i386" "x86" "linux32" "-32bit")
-  
+
   # Check if filename contains any architecture indicator
   local has_arch_indicator=0
   local filename_arch=""
-  
+
   # Check for x86_64 patterns
   for pattern in "${x86_64_patterns[@]}"; do
     if [[ "$filename_lower" == *"$pattern"* ]]; then
@@ -152,7 +152,7 @@ is_appimage_arch_compatible() {
       break
     fi
   done
-  
+
   # Check for aarch64 patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${aarch64_patterns[@]}"; do
@@ -163,7 +163,7 @@ is_appimage_arch_compatible() {
       fi
     done
   fi
-  
+
   # Check for armhf patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${armhf_patterns[@]}"; do
@@ -174,7 +174,7 @@ is_appimage_arch_compatible() {
       fi
     done
   fi
-  
+
   # Check for i686 patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${i686_patterns[@]}"; do
@@ -185,22 +185,22 @@ is_appimage_arch_compatible() {
       fi
     done
   fi
-  
+
   # If no architecture indicator found, assume it's compatible (generic build)
   if (( !has_arch_indicator )); then
     return 0
   fi
-  
+
   # Check if the detected architecture matches our system
   if [[ "$filename_arch" == "$system_arch" ]]; then
     return 0
   fi
-  
+
   # x86_64 can sometimes run i686, but not the other way around
   if [[ "$system_arch" == "x86_64" && "$filename_arch" == "i686" ]]; then
     return 0
   fi
-  
+
   # Not compatible
   return 1
 }
@@ -250,17 +250,17 @@ get_github_latest_appimage() {
   local source_url="$1"
   local owner_repo
   owner_repo="$(extract_github_owner_repo "$source_url")"
-  
+
   if [[ -z "$owner_repo" ]]; then
     die "Could not extract owner/repo from GitHub URL: $source_url"
   fi
-  
+
   local api_url="https://api.github.com/repos/$owner_repo/releases/latest"
-  
+
   # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
-    download_cmd=(curl -fsSL)
+    download_cmd=(curl -fSL)
     # Add GitHub token if available (helps with rate limiting)
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
       download_cmd+=(-H "Authorization: token $GITHUB_TOKEN")
@@ -273,9 +273,9 @@ get_github_latest_appimage() {
   else
     die "Neither curl nor wget found. Cannot query GitHub API."
   fi
-  
+
   vlog "Querying GitHub API: $api_url"
-  
+
   # Pass URL after -- to prevent option injection
   local response
   response="$("${download_cmd[@]}" -- "$api_url" 2>/dev/null)" || {
@@ -283,13 +283,13 @@ get_github_latest_appimage() {
     warn "Set GITHUB_TOKEN environment variable to increase limits."
     die "Failed to query GitHub releases API"
   }
-  
+
   # Find .AppImage asset URLs and filter by architecture
   local -a all_urls=()
   local system_arch
   system_arch="$(get_system_arch)"
   vlog "System architecture: $system_arch"
-  
+
   if have_cmd jq; then
     # Use jq to find all .AppImage assets
     while IFS= read -r url; do
@@ -306,24 +306,24 @@ get_github_latest_appimage() {
       [[ -n "$url" ]] && all_urls+=("$url")
     done < <(echo "$response" | sed -E -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]*\.AppImage)".*/\1/p' 2>/dev/null)
   fi
-  
+
   if (( ${#all_urls[@]} == 0 )); then
     die "No .AppImage asset found in latest release of $owner_repo"
   fi
-  
+
   vlog "Found ${#all_urls[@]} AppImage asset(s)"
-  
+
   # Filter and prioritize by architecture
   local -a compatible_urls=()
   local -a preferred_urls=()
-  
+
   for url in "${all_urls[@]}"; do
     local filename
     filename="$(basename "${url%%\?*}")"
-    
+
     if is_appimage_arch_compatible "$filename"; then
       compatible_urls+=("$url")
-      
+
       # Check if this one explicitly matches our architecture (preferred)
       local filename_lower="${filename,,}"
       case "$system_arch" in
@@ -352,9 +352,9 @@ get_github_latest_appimage() {
       vlog "Skipping incompatible: $filename"
     fi
   done
-  
+
   local appimage_url=""
-  
+
   # Prefer explicit architecture match, then fall back to compatible (generic) ones
   if (( ${#preferred_urls[@]} > 0 )); then
     appimage_url="${preferred_urls[0]}"
@@ -366,7 +366,7 @@ get_github_latest_appimage() {
     # All AppImages were for incompatible architectures
     die "No compatible AppImage found for $system_arch architecture in latest release of $owner_repo"
   fi
-  
+
   echo "$appimage_url"
 }
 
@@ -392,38 +392,38 @@ compute_checksum() {
 download_file() {
   local url="$1"
   local output_file="$2"
-  
+
   # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
-    download_cmd=(curl -fsSL)
+    download_cmd=(curl -fSL)
   elif have_cmd wget; then
     download_cmd=(wget -qO-)
   else
     die "Neither curl nor wget found. Cannot download from URL."
   fi
-  
+
   # Download to temporary file first, then move atomically
   local tmp_file
   tmp_file="$(mktemp)" || die "Failed to create temporary file"
-  
+
   if (( DRY_RUN )); then
     log "[dry-run] Would download from: $url"
     log "[dry-run] Would save to: $output_file"
     rm -f "$tmp_file"
     return 0
   fi
-  
+
   log "Downloading from: $url"
   # Pass URL after -- to prevent option injection
   if ! "${download_cmd[@]}" -- "$url" >"$tmp_file"; then
     rm -f "$tmp_file"
     die "Failed to download from URL: $url"
   fi
-  
+
   # Verify it's not empty
   [[ -s "$tmp_file" ]] || { rm -f "$tmp_file"; die "Downloaded file is empty"; }
-  
+
   # Move to final location
   mv -f "$tmp_file" "$output_file" || { rm -f "$tmp_file"; die "Failed to save downloaded file"; }
 }
@@ -639,19 +639,19 @@ store_checksum() {
   local checksum="$3"
   local checksum_file
   checksum_file="$(get_checksum_file "$app_dir")"
-  
+
   if (( DRY_RUN )); then
     log "[dry-run] store checksum: $checksum  $filename"
     return 0
   fi
-  
+
   # Remove existing entry for this filename if any, then append new one
   if [[ -f "$checksum_file" ]]; then
     # Use awk for literal string matching to avoid regex metacharacter issues
     awk -v fn="$filename" '!($1 ~ /^[0-9a-f]{64}$/ && $2 == fn)' "$checksum_file" >"$checksum_file.tmp" 2>/dev/null || true
     mv -f "$checksum_file.tmp" "$checksum_file" 2>/dev/null || true
   fi
-  
+
   # Append new entry: checksum (64 hex chars) + 2 spaces + filename
   printf "%s  %s\n" "$checksum" "$filename" >>"$checksum_file"
 }
@@ -661,22 +661,22 @@ find_existing_by_checksum() {
   local checksum="$2"
   local checksum_file
   checksum_file="$(get_checksum_file "$app_dir")"
-  
+
   if [[ ! -f "$checksum_file" ]]; then
     return 1
   fi
-  
+
   # Look for matching checksum in stored entries
   local match
   match="$(grep "^$checksum  " "$checksum_file" 2>/dev/null | head -n1 || true)"
   if [[ -z "$match" ]]; then
     return 1
   fi
-  
+
   # Extract filename (everything after checksum + 2 spaces)
   local filename
   filename="${match#*  }"
-  
+
   # Verify the file still exists
   local full_path="$app_dir/versions/$filename"
   if [[ -f "$full_path" ]]; then
@@ -697,16 +697,16 @@ remove_checksum_entry() {
   local filename="$2"
   local checksum_file
   checksum_file="$(get_checksum_file "$app_dir")"
-  
+
   if [[ ! -f "$checksum_file" ]]; then
     return 0
   fi
-  
+
   if (( DRY_RUN )); then
     log "[dry-run] remove checksum entry for: $filename"
     return 0
   fi
-  
+
   # Use awk for literal string matching to avoid regex metacharacter issues
   awk -v fn="$filename" '!($1 ~ /^[0-9a-f]{64}$/ && $2 == fn)' "$checksum_file" >"$checksum_file.tmp" 2>/dev/null || true
   mv -f "$checksum_file.tmp" "$checksum_file" 2>/dev/null || true
@@ -843,7 +843,7 @@ EOF
     tmp_app_copy="$(mktemp "$(dirname "$app_copy")/.desktop.XXXXXX")" || die "Failed to create temp file for desktop entry"
     printf "%s\n" "$content" >"$tmp_app_copy"
     mv -f "$tmp_app_copy" "$app_copy" || die "Failed to write desktop entry: $app_copy"
-    
+
     local tmp_desktop_install
     tmp_desktop_install="$(mktemp "$(dirname "$desktop_install")/.desktop.XXXXXX")" || die "Failed to create temp file for desktop entry"
     printf "%s\n" "$content" >"$tmp_desktop_install"
@@ -1186,7 +1186,7 @@ cmd_install() {
     temp_file="$(mktemp)" || die "Failed to create temporary file"
     # Cleanup temp file on exit
     trap 'rm -f "${temp_file:-}"' EXIT
-    
+
     # Infer filename from URL if possible, otherwise use temp name
     local url_filename
     url_filename="$(basename "${download_url%%\?*}")"
@@ -1201,9 +1201,9 @@ cmd_install() {
       mv -f "$temp_file" "${temp_file}.AppImage" 2>/dev/null || true
       temp_file="${temp_file}.AppImage"
     fi
-    
+
     download_file "$download_url" "$temp_file"
-    
+
     # Validate downloaded file is actually an AppImage
     # Check extension first (quick check)
     local downloaded_base
@@ -1212,7 +1212,7 @@ cmd_install() {
       rm -f "$temp_file"
       die "Downloaded file does not have AppImage extension"
     fi
-    
+
     # Basic validation: check if file is executable or at least a binary
     # AppImages should be executable binaries
     if [[ ! -x "$temp_file" ]]; then
@@ -1222,7 +1222,7 @@ cmd_install() {
         die "Downloaded file cannot be made executable"
       }
     fi
-    
+
     file="$temp_file"
     # Clear trap since we'll handle cleanup after install
     trap - EXIT
@@ -1260,7 +1260,7 @@ cmd_install() {
   # Check if this exact file already exists
   local existing_file
   existing_file="$(find_existing_by_checksum "$app_dir" "$source_checksum" || true)"
-  
+
   local dest
   local dest_basename
   if [[ -n "$existing_file" ]]; then
@@ -2301,7 +2301,7 @@ cmd_update_self() {
   # Simple path resolution - just use $0 and make it absolute if needed
   local script_path="$0"
   local full_script_path=""
-  
+
   # If $0 is relative, make it absolute using current directory
   if [[ "$script_path" != /* ]]; then
     local cwd
@@ -2311,7 +2311,7 @@ cmd_update_self() {
     # Already absolute
     full_script_path="$script_path"
   fi
-  
+
   # Try readlink -f to resolve symlinks if available
   if command -v readlink >/dev/null 2>&1; then
     local resolved
@@ -2320,68 +2320,68 @@ cmd_update_self() {
       full_script_path="$resolved"
     fi
   fi
-  
+
   # Verify the script file exists
   if [[ ! -f "$full_script_path" ]]; then
     die "Script file not found: $full_script_path"
   fi
-  
+
   # Check writability only if not dry-run
   if (( !DRY_RUN )) && [[ ! -w "$full_script_path" ]]; then
     die "Script file is not writable: $full_script_path (may need sudo or chmod)"
   fi
-  
+
   # GitHub raw URL (same as README)
   local github_url="https://raw.githubusercontent.com/RavioliSauce/appi/refs/heads/main/appi.sh"
-  
+
   # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
-    download_cmd=(curl -fsSL)
+    download_cmd=(curl -fSL)
   elif have_cmd wget; then
     download_cmd=(wget -qO-)
   else
     die "Neither curl nor wget found. Cannot download update. Install one of them, or download at $github_url"
   fi
-  
+
   log "Checking for updates..."
   log "Current version: $VERSION"
   log "Script location: $full_script_path"
-  
+
   if (( DRY_RUN )); then
     log "[dry-run] Would download from: $github_url"
     log "[dry-run] Would replace: $full_script_path"
     log "[dry-run] Update simulation complete"
     return 0
   fi
-  
+
   # Download to temporary file
   local tmp_file
   tmp_file="$(mktemp)" || die "Failed to create temporary file"
-  
+
   # Cleanup on exit
   APPI_UPDATE_TMP_FILE="$tmp_file"
   trap 'rm -f "${APPI_UPDATE_TMP_FILE:-}"' EXIT
-  
+
   log "Downloading latest version from GitHub..."
-  
+
   # Download the new version - pass URL after -- to prevent option injection
   if ! "${download_cmd[@]}" -- "$github_url" >"$tmp_file"; then
     die "Failed to download update from GitHub"
   fi
-  
+
   # Verify it's a valid bash script (basic check)
   if ! head -n 1 "$tmp_file" | grep -q "^#!/usr/bin/env bash"; then
     die "Downloaded file does not appear to be a valid bash script"
   fi
-  
+
   # Preserve executable permissions
   chmod +x "$tmp_file"
-  
+
   # Get new version for comparison
   local new_version
   new_version="$(grep -m1 "^VERSION=" "$tmp_file" 2>/dev/null | cut -d'"' -f2 || echo "unknown")"
-  
+
   if [[ "$new_version" == "$VERSION" ]]; then
     log "Already up to date (version $VERSION)"
     rm -f "$tmp_file"
@@ -2390,7 +2390,7 @@ cmd_update_self() {
     APPI_UPDATE_TMP_FILE=""
     return 0
   fi
-  
+
   log "New version available: $new_version"
 
   # Optional integrity check (user-provided)
@@ -2402,16 +2402,16 @@ cmd_update_self() {
     fi
     vlog "Update checksum verified: $new_sha"
   fi
-  
+
   # Replace the script atomically
   if ! mv -f "$tmp_file" "$full_script_path"; then
     die "Failed to replace script (may need write permissions)"
   fi
-  
+
   # Disable trap before clearing variable to avoid edge-case cleanup issues
   trap - EXIT
   APPI_UPDATE_TMP_FILE=""
-  
+
   success "Update complete! Updated from $VERSION to $new_version"
   log "Run '$PROG version' to verify"
 }
@@ -2419,18 +2419,18 @@ cmd_update_self() {
 cmd_update_app() {
   local id="$1"
   local force="${2:-0}"
-  
+
   id="$(normalize_app_id "$id")"
   local app_dir="$ROOT/$id"
-  
+
   [[ -d "$app_dir" ]] || die "not installed: $id"
   [[ -e "$app_dir/current" || -L "$app_dir/current" ]] || die "missing current for: $id"
-  
+
   log "Checking for updates: $id"
-  
+
   local download_url=""
   local update_script="$app_dir/meta/update.sh"
-  
+
   # 1. Try user-provided update script
   if [[ -x "$update_script" ]]; then
     vlog "Running update script: $update_script"
@@ -2444,13 +2444,13 @@ cmd_update_app() {
     # 2. Try stored source URL
     local source_url
     source_url="$(read_source_url "$app_dir" 2>/dev/null || true)"
-    
+
     if [[ -z "$source_url" ]]; then
       die "No update source for $id. Add an update script at $app_dir/meta/update.sh or install with a source URL."
     fi
-    
+
     vlog "Source URL: $source_url"
-    
+
     # 3. Check if it's a GitHub URL
     if is_github_url "$source_url"; then
       log "Fetching latest release from GitHub..."
@@ -2462,12 +2462,12 @@ cmd_update_app() {
       vlog "Using direct URL: $download_url"
     fi
   fi
-  
+
   # Validate URL
   if ! is_url "$download_url"; then
     die "Invalid download URL: $download_url"
   fi
-  
+
   # Get current version checksum for comparison
   local current_path="$app_dir/current"
   local current_checksum=""
@@ -2483,15 +2483,15 @@ cmd_update_app() {
       vlog "Current checksum: $current_checksum"
     fi
   fi
-  
+
   # Download to temporary file
   local tmp_file
   tmp_file="$(mktemp)" || die "Failed to create temporary file"
-  
+
   # Cleanup on exit
   local cleanup_file="$tmp_file"
   trap 'rm -f "$cleanup_file"' EXIT
-  
+
   # Infer filename from URL
   local url_filename
   url_filename="$(basename "${download_url%%\?*}")"
@@ -2506,7 +2506,7 @@ cmd_update_app() {
     tmp_file="${tmp_file}.AppImage"
     cleanup_file="$tmp_file"
   fi
-  
+
   if (( DRY_RUN )); then
     log "[dry-run] Would download from: $download_url"
     log "[dry-run] Would install to: $app_dir"
@@ -2514,31 +2514,31 @@ cmd_update_app() {
     trap - EXIT
     return 0
   fi
-  
+
   download_file "$download_url" "$tmp_file"
   chmod +x "$tmp_file"
-  
+
   # Compare checksums
   local new_checksum
   new_checksum="$(compute_checksum "$tmp_file")"
   vlog "New checksum: $new_checksum"
-  
+
   if [[ -n "$current_checksum" && "$current_checksum" == "$new_checksum" ]] && (( !force )); then
     log "Already up to date: $id"
     rm -f "$tmp_file"
     trap - EXIT
     return 0
   fi
-  
+
   # Install the new version using existing install logic
   log "Installing update for $id..."
-  
+
   # Clear trap before calling install (it manages its own cleanup)
   trap - EXIT
-  
+
   # Call install with the downloaded file
   cmd_install "$tmp_file" --id "$id" --move
-  
+
   success "Updated: $id"
 }
 
@@ -2547,7 +2547,7 @@ cmd_update() {
   local do_all=0
   local force=0
   local app_id=""
-  
+
   # Parse arguments
   while (( $# )); do
     case "$1" in
@@ -2567,7 +2567,7 @@ cmd_update() {
     esac
     shift || true
   done
-  
+
   # Dispatch based on arguments
   if (( do_self )); then
     if [[ -n "$app_id" ]] || (( do_all )); then
@@ -2576,14 +2576,14 @@ cmd_update() {
     cmd_update_self
     return 0
   fi
-  
+
   if (( do_all )); then
     if [[ -n "$app_id" ]]; then
       die "--all cannot be combined with APP_ID"
     fi
-    
+
     [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
-    
+
     local any=0
     local updated=0
     local failed=0
@@ -2592,7 +2592,7 @@ cmd_update() {
       local id
       id="$(basename "$d")"
       [[ -e "$d/current" ]] || continue
-      
+
       # Check if app has an update source
       local has_source=0
       if [[ -x "$d/meta/update.sh" ]]; then
@@ -2600,12 +2600,12 @@ cmd_update() {
       elif [[ -f "$d/meta/source_url.txt" ]]; then
         has_source=1
       fi
-      
+
       if (( !has_source )); then
         vlog "Skipping $id (no update source)"
         continue
       fi
-      
+
       any=1
       log ""
       log "$(color_cyan "=== Updating: $id ===")"
@@ -2616,7 +2616,7 @@ cmd_update() {
         (( failed++ ))
       fi
     done
-    
+
     log ""
     if (( any )); then
       log "Update complete: $updated succeeded, $failed failed"
@@ -2625,12 +2625,12 @@ cmd_update() {
     fi
     return 0
   fi
-  
+
   if [[ -n "$app_id" ]]; then
     cmd_update_app "$app_id" "$force"
     return 0
   fi
-  
+
   # No arguments - show usage hint
   die "update requires APP_ID, --self, or --all (try: $PROG update --help)"
 }
