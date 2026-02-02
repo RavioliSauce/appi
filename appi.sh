@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.0.1"
+VERSION="1.0.2"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -1595,13 +1595,21 @@ cmd_info() {
     log "$(color_cyan "Extracted:") no"
   fi
 
-  # Source URL
+  # Update method
+  local update_script="$app_dir/meta/update.sh"
   local source_url
   source_url="$(read_source_url "$app_dir" || true)"
-  if [[ -n "$source_url" ]]; then
-    log "$(color_cyan "Source URL:") $source_url"
+
+  if [[ -x "$update_script" ]]; then
+    log "$(color_cyan "Update:") custom script ($update_script)"
+  elif [[ -n "$source_url" ]] && is_github_url "$source_url"; then
+    local owner_repo
+    owner_repo="$(extract_github_owner_repo "$source_url")"
+    log "$(color_cyan "Update:") GitHub releases ($owner_repo)"
+  elif [[ -n "$source_url" ]] && is_url "$source_url"; then
+    log "$(color_cyan "Update:") source URL ($source_url)"
   else
-    log "$(color_cyan "Source URL:") (not set)"
+    log "$(color_cyan "Update:") not configured"
   fi
 
   # Stored versions
