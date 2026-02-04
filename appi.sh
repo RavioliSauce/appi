@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.0.2"
+VERSION="1.1.0"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -103,6 +103,119 @@ run_cmd() {
 ensure_dir() { run_cmd mkdir -p "$1"; }
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# Check if unprivileged user namespaces are available
+# Returns 0 if userns is available, 1 if disabled
+check_userns_support() {
+  unshare --user --map-root-user true 2>/dev/null
+}
+
+# Print guidance on enabling unprivileged user namespaces
+# Returns 0 if userns was successfully enabled, 1 otherwise
+print_userns_guidance() {
+  log ""
+  log "$(color_cyan "Unprivileged user namespaces are disabled on this system.")"
+  log ""
+  log "Modern Chromium/Electron apps prefer user namespaces for sandboxing."
+  log "Enabling userns is the recommended approach (distributions have mitigations)."
+  log ""
+
+  # Detect which sysctl parameters exist to provide distribution-specific guidance
+  if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+    # Ubuntu 23.10+ - AppArmor-based restriction
+    log "$(color_yellow "Ubuntu detected (AppArmor-based restriction).")"
+    log ""
+    log "On Ubuntu 24.04+, the kernel allows userns by default"
+    log "(kernel.unprivileged_userns_clone=1), but AppArmor restricts which"
+    log "applications can use it unless they're whitelisted."
+    log ""
+    log "$(color_yellow "Option 1 (recommended):") Create an AppArmor profile for your app"
+    log "This is the most secure approach but requires AppArmor knowledge."
+    log ""
+    log "$(color_yellow "Option 2:") Disable AppArmor restriction globally:"
+    log "  $(color_cyan "Temporary (until reboot):")"
+    log "    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
+    log ""
+    log "  $(color_cyan "Permanent:")"
+    log "    echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-userns.conf"
+    log ""
+    
+    # Offer interactive execution of temporary command
+    if (( !DRY_RUN )) && [[ -t 0 ]]; then
+      echo -n "Would you like appi to enable userns temporarily (until reboot)? [y/N] " >&2
+      local ans=""
+      read -r ans || true
+      echo >&2
+      if [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]; then
+        log "Enabling unprivileged user namespaces temporarily..."
+        if sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null; then
+          log ""
+          success "Done. Electron apps should now work. Run the permanent command above to persist across reboots."
+          return 0
+        else
+          warn "Failed to enable userns. You may need to run the command manually."
+          return 1
+        fi
+      else
+        return 1
+      fi
+    else
+      return 1
+    fi
+  elif [[ -f /proc/sys/kernel/unprivileged_userns_clone ]]; then
+    # Debian - kernel parameter controls userns
+    log "$(color_yellow "Debian detected.")"
+    log ""
+    log "$(color_yellow "To enable temporarily (until reboot):")"
+    log "  sudo sysctl -w kernel.unprivileged_userns_clone=1"
+    log ""
+    log "$(color_yellow "To enable permanently:")"
+    log "  echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf"
+    log ""
+    
+    # Offer interactive execution of temporary command
+    if (( !DRY_RUN )) && [[ -t 0 ]]; then
+      echo -n "Would you like appi to enable userns temporarily (until reboot)? [y/N] " >&2
+      local ans=""
+      read -r ans || true
+      echo >&2
+      if [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]; then
+        log "Enabling unprivileged user namespaces temporarily..."
+        if sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null; then
+          log ""
+          success "Done. Electron apps should now work. Run the permanent command above to persist across reboots."
+          return 0
+        else
+          warn "Failed to enable userns. You may need to run the command manually."
+          return 1
+        fi
+      else
+        return 1
+      fi
+    else
+      return 1
+    fi
+  else
+    # Other distributions - check user.max_user_namespaces
+    log "$(color_yellow "Other distribution detected.")"
+    log ""
+    log "Check if user namespaces are limited:"
+    log "  sysctl user.max_user_namespaces"
+    log ""
+    log "If the value is 0, enable it:"
+    log "  sudo sysctl -w user.max_user_namespaces=10000"
+    log ""
+    log "Or check for distribution-specific userns restrictions."
+    log ""
+    log "After enabling, Chromium/Electron apps should work without SUID fixes."
+    log ""
+    log "$(color_yellow "Note:") The SUID chrome-sandbox fix is available as a fallback for"
+    log "hardened systems (linux-hardened) or corporate environments where sysctl"
+    log "changes are restricted."
+    log ""
+    return 1
+  fi
+}
 
 is_url() {
   [[ "$1" =~ ^https?:// ]]
@@ -1075,7 +1188,9 @@ $(color_cyan "COMMANDS:")
       Extract AppImage and fix compatibility issues (advanced/opt-in).
       With $(color_yellow "--check"), runs health checks on one or all apps.
       With $(color_yellow "--extract"), extracts AppImage to run without FUSE (no sudo required).
-      With $(color_yellow "--chrome-sandbox"), extracts and sets SUID on chrome-sandbox binary (requires sudo).
+      With $(color_yellow "--chrome-sandbox"), fallback SUID fix for hardened systems where
+      unprivileged user namespaces cannot be enabled (requires sudo). Checks userns first
+      and guides users to enable it if available. Prefer enabling userns via sysctl instead.
       With $(color_yellow "--revert"), removes extracted version and reverts to AppImage.
 
   $(color_green "uninstall") <APP_ID> [$(color_yellow "--purge")] [$(color_yellow "--no-prompt")]
@@ -1860,13 +1975,65 @@ cmd_fix() {
   fi
 
   if (( chrome_sandbox )); then
-    # Security warning
+    # Check userns support first
+    log "Checking unprivileged user namespaces support..."
+    if check_userns_support; then
+      warn "Unprivileged user namespaces are available on this system."
+      warn "The SUID chrome-sandbox fix is not needed - Chromium/Electron apps"
+      warn "can use the default sandbox with user namespaces."
+      log ""
+      log "Consider using 'appi fix $id --extract' instead, which extracts"
+      log "the AppImage without requiring SUID permissions."
+      log ""
+      if (( !DRY_RUN )); then
+        if [[ -t 0 ]]; then
+          echo -n "Do you still want to apply the SUID fix? [y/N] " >&2
+          ans=""
+          read -r ans || true
+          echo >&2
+          [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]] || {
+            log "Aborted. Use 'appi fix $id --extract' for normal extraction."
+            return 0
+          }
+        else
+          die "userns is available - SUID fix not needed. Use --extract instead."
+        fi
+      fi
+    else
+      # userns is disabled - show guidance
+      if print_userns_guidance; then
+        # userns was successfully enabled
+        log ""
+        success "Unprivileged user namespaces enabled temporarily."
+        log "Try running your app now. If it works, you can make it permanent"
+        log "using the command shown above."
+        return 0
+      fi
+      # Fall through to SUID prompt if declined or failed
+      if (( !DRY_RUN )); then
+        if [[ -t 0 ]]; then
+          echo -n "Do you want to proceed with SUID fallback fix? [y/N] " >&2
+          ans=""
+          read -r ans || true
+          echo >&2
+          [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]] || {
+            log "Aborted. Enable userns (see instructions above) or use 'appi fix $id --extract'."
+            return 0
+          }
+        else
+          die "userns disabled. Enable it first (see guidance above) or use --extract."
+        fi
+      fi
+    fi
+
+    # Security warning for SUID fix
     warn "This will set SUID root on an extracted binary."
     warn "Only proceed if you trust this AppImage."
     warn "This is a privilege-escalation surface if the binary has issues."
+    warn "This is a fallback for hardened systems where userns cannot be enabled."
     if (( !DRY_RUN )); then
       if [[ -t 0 ]]; then
-        echo -n "Continue? [y/N] " >&2
+        echo -n "Continue with SUID fix? [y/N] " >&2
         ans=""
         read -r ans || true
         echo >&2
@@ -1876,7 +2043,7 @@ cmd_fix() {
       fi
     fi
 
-    log "Fixing chrome-sandbox for '$id'..."
+    log "Applying SUID chrome-sandbox fix for '$id'..."
 
     extract_appimage "$app_dir" "$appimage_path" "$appimage_checksum" "$appimage_basename"
     local extracted_dir="$app_dir/extracted"

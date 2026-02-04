@@ -204,21 +204,61 @@ appi fix gimp --extract
 
 This extracts the AppImage to `~/Apps/<app_id>/extracted/` so it can run without FUSE. No sudo required.
 
-**Fix Chrome/Electron sandbox (requires sudo):**
+**Chrome/Electron sandbox support:**
 
-Ubuntu 23.10+ restricts unprivileged user namespaces by default (`kernel.unprivileged_userns_clone=0`), which prevents Chromium/Electron apps from using their default sandbox. As a workaround, these apps must use the legacy SUID sandbox instead. The `chrome-sandbox` binary needs root ownership and SUID bit (4755) to function.
+Modern Chromium/Electron apps use unprivileged user namespaces for sandboxing. Different distributions handle userns restrictions differently:
 
-**Note:** Alternatively, you can enable unprivileged user namespaces system-wide by setting `kernel.unprivileged_userns_clone=1` via sysctl (requires root), but this reduces system security. The `--chrome-sandbox` fix is a safer per-app workaround.
+**Ubuntu 24.04+ situation:**
+- `kernel.unprivileged_userns_clone=1` (enabled by default) - Kernel allows userns ✓
+- `kernel.apparmor_restrict_unprivileged_userns=1` (restricted by default) - AppArmor blocks it unless app is whitelisted ✗
+
+The kernel permits userns, but AppArmor gates access to it. Most Electron AppImages aren't in Ubuntu's whitelist, so they fail despite `clone=1`.
+
+**Preferred solution: Enable unprivileged user namespaces**
+
+The `appi fix` command automatically detects your distribution and provides appropriate guidance. Distributions have implemented mitigations for userns vulnerabilities (Ubuntu's AppArmor-based restrictions, kernel hardening), making userns the recommended approach.
+
+**Ubuntu (AppArmor-based restriction):**
+- **Option 1 (recommended):** Create an AppArmor profile for your app (most secure, requires AppArmor knowledge)
+- **Option 2:** Disable AppArmor restriction globally:
+  ```bash
+  # Temporary (until reboot)
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+  
+  # Permanent
+  echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-userns.conf
+  ```
+
+**Debian:**
+```bash
+# Temporary (until reboot)
+sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+# Permanent
+echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf
+```
+
+**Other distributions:**
+Check `user.max_user_namespaces` sysctl or distribution-specific restrictions.
+
+After enabling, Chromium/Electron apps should work without any fixes. The `appi fix` command will automatically detect if userns is available and guide you accordingly.
+
+**Fallback: SUID chrome-sandbox fix (for hardened systems)**
+
+For systems where userns cannot be enabled (linux-hardened kernel, corporate environments with locked sysctl), you can use the SUID fallback:
 
 ```bash
 appi fix gimp --chrome-sandbox
 ```
 
 This will:
+- Check userns support first and guide you to enable it if available
 - Extract the AppImage to `~/Apps/<app_id>/extracted/`
 - Set SUID permissions on `chrome-sandbox` (requires sudo)
 - Update desktop entries to use the extracted version
 - Future runs will automatically use the extracted version (no FUSE mount)
+
+**Note:** The SUID fix is a privilege-escalation surface and should only be used when userns cannot be enabled. The `--chrome-sandbox` option will warn you if userns is available and suggest using `--extract` instead.
 
 **Revert to AppImage:**
 
@@ -254,7 +294,7 @@ NO_COLOR=1 appi install file.AppImage
 
 * `app_id` is restricted to: lowercase letters, digits, dashes (e.g. `obs-studio`)
 * If your root path contains spaces, some desktop environments may not parse Exec/Icon perfectly.
-* AppImages using Chrome/Electron sandbox may fail when mounted via FUSE. Use `appi fix <app_id> --chrome-sandbox` to extract and fix.
+* AppImages using Chrome/Electron sandbox may fail when unprivileged user namespaces are disabled. Enable userns via sysctl (see sandbox section above) or use `appi fix <app_id> --extract` to extract without FUSE. The `--chrome-sandbox` SUID fix is available as a fallback for hardened systems.
 * **Duplicate detection:** appi uses SHA256 checksums to detect duplicate files. Installing the same AppImage twice (even with different filenames or sources) will reuse the existing file instead of creating a duplicate copy.
 * **Source URL tracking:** When installing from a URL, appi automatically stores it as the source URL (shown in `appi info`). For local files, use `--source-url` to record the download location. Source URLs are used by the `update` command to automatically fetch new versions.
 * **Install defaults:** `install` uses `--copy` (keeps original file), `--icons` (best-effort icon extraction), and `--link` (only if `~/.local/bin` exists).
