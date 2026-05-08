@@ -196,6 +196,24 @@ appi update gimp
 
 Use the `fix` command to extract the AppImage and fix compatibility issues:
 
+**Recommended for direct AppImage runs: FUSE 2**
+
+Most AppImages need the FUSE 2 runtime library (`libfuse.so.2`) to run directly from the `.AppImage` file. If it is missing, appi will warn you before launching, and the AppImage runtime may fail with an error like `dlopen(): error loading libfuse.so.2`.
+
+On Ubuntu/Debian systems, install the compatibility library with:
+
+```bash
+sudo apt install libfuse2t64
+```
+
+On older releases, the package may be named:
+
+```bash
+sudo apt install libfuse2
+```
+
+`fuse3` alone usually does not provide `libfuse.so.2`. If you do not want to install FUSE, use extraction instead:
+
 **Extract AppImage (no FUSE required):**
 
 ```bash
