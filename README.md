@@ -93,6 +93,15 @@ appi refresh        # refresh all
 appi refresh gimp --source-url https://example.com/new-url  # update source URL
 ```
 
+#### Check health
+
+```bash
+appi health
+appi health gimp
+```
+
+Checks global dependencies and integration paths, then verifies installed app wrappers, desktop entries, executable bits, and extracted app state.
+
 #### Uninstall (keep versions by default)
 
 ```bash
