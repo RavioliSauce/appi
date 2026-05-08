@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.1.1"
+VERSION="1.2.0"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -1158,6 +1158,7 @@ $PROG — User-space AppImage layout + desktop integration (no daemon, no root f
 
 USAGE:
   $PROG [$(color_yellow "--root") PATH] [$(color_yellow "--dry-run")] [$(color_yellow "--quiet")|$(color_yellow "--verbose")] <command> [args...]
+  $PROG <command> $(color_yellow "--help")
 
 $(color_cyan "COMMANDS:")
   $(color_green "install") <file.AppImage|URL> [$(color_yellow "--id") APP_ID] [$(color_yellow "--copy")|$(color_yellow "--move")] [$(color_yellow "--link")|$(color_yellow "--no-link")] [$(color_yellow "--icons")|$(color_yellow "--no-icons")]
@@ -1257,8 +1258,233 @@ $(color_cyan "EXAMPLES:")
 EOF
 }
 
+is_help_arg() {
+  [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]
+}
+
+command_help() {
+  local topic="$1"
+  init_color
+
+  case "$topic" in
+    install)
+      cat <<EOF
+$PROG install - Add an AppImage
+
+$(color_cyan "USAGE:")
+  $PROG install <file.AppImage|URL> [$(color_yellow "--id") APP_ID] [$(color_yellow "--copy")|$(color_yellow "--move")] [$(color_yellow "--link")|$(color_yellow "--no-link")] [$(color_yellow "--icons")|$(color_yellow "--no-icons")] [$(color_yellow "--source-url") URL]
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "--id") APP_ID       Set the app ID instead of inferring it from the filename
+  $(color_yellow "--copy")            Copy the AppImage into appi storage (default)
+  $(color_yellow "--move")            Move the AppImage into appi storage
+  $(color_yellow "--link")            Create ~/.local/bin/<app_id>
+  $(color_yellow "--no-link")         Do not create ~/.local/bin/<app_id>
+  $(color_yellow "--icons")           Extract an icon when possible (default)
+  $(color_yellow "--no-icons")        Skip icon extraction
+  $(color_yellow "--source-url") URL  Store or use a source URL for future updates
+  $(color_yellow "-h"), $(color_yellow "--help")        Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG install ~/Downloads/GIMP-3.08.AppImage --id gimp
+  $PROG install https://example.com/app.AppImage --id myapp
+EOF
+      ;;
+    refresh)
+      cat <<EOF
+$PROG refresh - Rebuild desktop integration
+
+$(color_cyan "USAGE:")
+  $PROG refresh [APP_ID] [$(color_yellow "--icons")|$(color_yellow "--no-icons")] [$(color_yellow "--source-url") URL]
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "--icons")           Extract or refresh the icon when possible (default)
+  $(color_yellow "--no-icons")        Rebuild wrapper and desktop entry without extracting icons
+  $(color_yellow "--source-url") URL  Update the stored source URL for APP_ID
+  $(color_yellow "-h"), $(color_yellow "--help")        Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG refresh gimp
+  $PROG refresh
+  $PROG refresh gimp --source-url https://example.com/new-url
+EOF
+      ;;
+    list)
+      cat <<EOF
+$PROG list - Show installed apps
+
+$(color_cyan "USAGE:")
+  $PROG list
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+EOF
+      ;;
+    switch)
+      cat <<EOF
+$PROG switch - Switch an app to another installed version
+
+$(color_cyan "USAGE:")
+  $PROG switch <APP_ID> <VERSION>
+
+VERSION can be an exact filename or a unique case-insensitive partial match.
+If the app has an extracted version, it will be re-extracted automatically.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG switch gimp GIMP-3.08.AppImage
+  $PROG switch gimp 3.08
+EOF
+      ;;
+    info)
+      cat <<EOF
+$PROG info - Show details for an installed app
+
+$(color_cyan "USAGE:")
+  $PROG info <APP_ID>
+
+Shows location, current version, extraction status, update source, and stored versions.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+EOF
+      ;;
+    run)
+      cat <<EOF
+$PROG run - Run an installed app
+
+$(color_cyan "USAGE:")
+  $PROG run <APP_ID> [-- <args...>]
+
+Runs the app wrapper. If the app was extracted with $PROG fix, the wrapper uses
+the extracted AppRun; otherwise it runs the current AppImage.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG run gimp
+  $PROG run gimp -- --help
+EOF
+      ;;
+    fix)
+      cat <<EOF
+$PROG fix - Check or repair compatibility issues
+
+$(color_cyan "USAGE:")
+  $PROG fix $(color_yellow "--check") [APP_ID]
+  $PROG fix <APP_ID> [$(color_yellow "--extract")|$(color_yellow "--chrome-sandbox")|$(color_yellow "--revert")]
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "--check")            Run health checks for one app or all apps
+  $(color_yellow "--extract")          Extract the AppImage to run without FUSE
+  $(color_yellow "--chrome-sandbox")   Apply the SUID chrome-sandbox fallback (requires sudo)
+  $(color_yellow "--revert")           Remove extracted files and return to direct AppImage runs
+  $(color_yellow "-h"), $(color_yellow "--help")          Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG fix --check
+  $PROG fix --check gimp
+  $PROG fix gimp --extract
+  $PROG fix gimp --revert
+EOF
+      ;;
+    uninstall)
+      cat <<EOF
+$PROG uninstall - Remove app integration
+
+$(color_cyan "USAGE:")
+  $PROG uninstall <APP_ID> [$(color_yellow "--purge")] [$(color_yellow "--no-prompt")]
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "--purge")      Remove all stored files for the app
+  $(color_yellow "--no-prompt")  Do not prompt before purging
+  $(color_yellow "-h"), $(color_yellow "--help")   Show this help
+
+Without --purge, appi removes the desktop entry and bin link but keeps versions.
+EOF
+      ;;
+    clean)
+      cat <<EOF
+$PROG clean - Remove old AppImage versions
+
+$(color_cyan "USAGE:")
+  $PROG clean [APP_ID] [VERSION]
+
+Without APP_ID, cleans all apps. With APP_ID, removes non-current versions for
+that app. With VERSION, removes one non-current version by exact or partial match.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG clean
+  $PROG clean gimp
+  $PROG clean gimp GIMP-3.08.AppImage
+EOF
+      ;;
+    size)
+      cat <<EOF
+$PROG size - Show disk usage
+
+$(color_cyan "USAGE:")
+  $PROG size [APP_ID]
+
+Without APP_ID, shows a summary for all apps. With APP_ID, shows a component
+breakdown for that app and how much space can be cleaned.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+EOF
+      ;;
+    update)
+      cat <<EOF
+$PROG update - Update apps or appi itself
+
+$(color_cyan "USAGE:")
+  $PROG update <APP_ID> [$(color_yellow "--force")]
+  $PROG update $(color_yellow "--all") [$(color_yellow "--force")]
+  $PROG update $(color_yellow "--self")
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "--all")    Update all apps that have update sources
+  $(color_yellow "--self")   Update appi itself from GitHub
+  $(color_yellow "--force")  Re-download even if the checksum matches
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+
+Apps update from, in order: <app_dir>/meta/update.sh, GitHub releases for stored
+GitHub source URLs, then the stored source URL directly.
+
+$(color_cyan "EXAMPLES:")
+  $PROG update gimp
+  $PROG update --all
+  $PROG update --self
+EOF
+      ;;
+    version)
+      cat <<EOF
+$PROG version - Show version information
+
+$(color_cyan "USAGE:")
+  $PROG version
+  $PROG --version
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+EOF
+      ;;
+    *)
+      die "No help available for command: $topic"
+      ;;
+  esac
+}
+
 cmd_install() {
-  local file="${1:-}"; shift || true
+  local file="${1:-}"
+  if is_help_arg "$file"; then command_help install; return 0; fi
+  shift || true
   [[ -n "$file" ]] || die "install requires a path to an AppImage or a URL"
 
   local id=""
@@ -1272,6 +1498,7 @@ cmd_install() {
   # Parse options first
   while (( $# )); do
     case "$1" in
+      -h|--help) command_help install; return 0 ;;
       --id) shift; id="${1:-}"; [[ -n "$id" ]] || die "--id requires a value" ;;
       --copy) mode="copy" ;;
       --move) mode="move" ;;
@@ -1470,6 +1697,7 @@ cmd_refresh() {
 
   while (( $# )); do
     case "$1" in
+      -h|--help) command_help refresh; return 0 ;;
       --icons) icons=1 ;;
       --no-icons) icons=0 ;;
       --source-url) shift; source_url="${1:-}"; [[ -n "$source_url" ]] || die "--source-url requires a value" ;;
@@ -1518,6 +1746,9 @@ cmd_refresh() {
 }
 
 cmd_list() {
+  if is_help_arg "${1:-}"; then command_help list; return 0; fi
+  [[ $# -eq 0 ]] || die "list does not accept arguments (try: $PROG list --help)"
+
   [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
 
   local found=0
@@ -1603,6 +1834,8 @@ print_app_versions() {
 cmd_switch() {
   local id="${1:-}"
   local target="${2:-}"
+  if is_help_arg "$id" || is_help_arg "$target"; then command_help switch; return 0; fi
+  [[ -z "${3:-}" ]] || die "switch accepts APP_ID and VERSION only"
   [[ -n "$id" ]] || die "switch requires APP_ID"
   [[ -n "$target" ]] || die "switch requires VERSION (filename or partial match)"
   id="$(normalize_app_id "$id")"
@@ -1683,6 +1916,8 @@ cmd_switch() {
 
 cmd_info() {
   local id="${1:-}"
+  if is_help_arg "$id"; then command_help info; return 0; fi
+  [[ -z "${2:-}" ]] || die "info accepts APP_ID only"
   [[ -n "$id" ]] || die "info requires APP_ID"
   id="$(normalize_app_id "$id")"
 
@@ -1734,7 +1969,9 @@ cmd_info() {
 }
 
 cmd_run() {
-  local id="${1:-}"; shift || true
+  local id="${1:-}"
+  if is_help_arg "$id"; then command_help run; return 0; fi
+  shift || true
   [[ -n "$id" ]] || die "run requires APP_ID"
   id="$(normalize_app_id "$id")"
 
@@ -1864,6 +2101,7 @@ cmd_fix() {
   local -a args=("$@")
   for arg in "${args[@]}"; do
     case "$arg" in
+      -h|--help) command_help fix; return 0 ;;
       --chrome-sandbox) chrome_sandbox=1 ;;
       --extract|--appimage-extract) extract=1 ;;
       --revert) revert=1 ;;
@@ -2079,7 +2317,9 @@ cmd_fix() {
 }
 
 cmd_uninstall() {
-  local id="${1:-}"; shift || true
+  local id="${1:-}"
+  if is_help_arg "$id"; then command_help uninstall; return 0; fi
+  shift || true
   [[ -n "$id" ]] || die "uninstall requires APP_ID"
   id="$(normalize_app_id "$id")"
 
@@ -2088,6 +2328,7 @@ cmd_uninstall() {
 
   while (( $# )); do
     case "$1" in
+      -h|--help) command_help uninstall; return 0 ;;
       --purge) purge=1 ;;
       --no-prompt) no_prompt=1 ;;
       *) die "Unknown uninstall option: $1" ;;
@@ -2137,6 +2378,7 @@ cmd_uninstall() {
 cmd_clean() {
   local target="${1:-}"
   local version="${2:-}"
+  if is_help_arg "$target" || is_help_arg "$version"; then command_help clean; return 0; fi
   [[ -z "${3:-}" ]] || die "clean accepts at most APP_ID and optional VERSION"
 
   # If first arg looks like an option, treat as no app_id
@@ -2258,6 +2500,8 @@ cmd_clean() {
 
 cmd_size() {
   local target="${1:-}"
+  if is_help_arg "$target"; then command_help size; return 0; fi
+  [[ -z "${2:-}" ]] || die "size accepts at most APP_ID"
 
   # Helper to get human-readable size
   get_dir_size() {
@@ -2728,6 +2972,7 @@ cmd_update() {
   # Parse arguments
   while (( $# )); do
     case "$1" in
+      -h|--help) command_help update; return 0 ;;
       --self) do_self=1 ;;
       --all) do_all=1 ;;
       --force) force=1 ;;
@@ -2812,6 +3057,12 @@ cmd_update() {
   die "update requires APP_ID, --self, or --all (try: $PROG update --help)"
 }
 
+cmd_version() {
+  if is_help_arg "${1:-}"; then command_help version; return 0; fi
+  [[ $# -eq 0 ]] || die "version does not accept arguments (try: $PROG version --help)"
+  echo "$PROG $VERSION"
+}
+
 # ---------- global arg parsing + dispatch ----------
 
 # Parse global options with positional shifts
@@ -2848,7 +3099,7 @@ cmd="${REMAIN[0]:-}"
 case "$cmd" in
   install)   cmd_install "${REMAIN[@]:1}" ;;
   refresh)   cmd_refresh "${REMAIN[@]:1}" ;;
-  list)      cmd_list ;;
+  list)      cmd_list "${REMAIN[@]:1}" ;;
   switch)    cmd_switch "${REMAIN[@]:1}" ;;
   info)      cmd_info "${REMAIN[@]:1}" ;;
   run)       cmd_run "${REMAIN[@]:1}" ;;
@@ -2856,7 +3107,7 @@ case "$cmd" in
   size)      cmd_size "${REMAIN[@]:1}" ;;
   uninstall) cmd_uninstall "${REMAIN[@]:1}" ;;
   clean)     cmd_clean "${REMAIN[@]:1}" ;;
-  version)   echo "$PROG $VERSION" ;;
+  version)   cmd_version "${REMAIN[@]:1}" ;;
   update)    cmd_update "${REMAIN[@]:1}" ;;
   *) die "Unknown command: $cmd (try --help)" ;;
 esac
