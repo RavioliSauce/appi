@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.1.0"
+VERSION="1.1.1"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -924,7 +924,9 @@ write_desktop_file() {
   ensure_dir "$(dirname "$app_copy")"
   ensure_dir "$(dirname "$desktop_install")"
 
-  # NOTE: Exec/TryExec are quoted to handle spaces in paths.
+  # NOTE: Exec uses desktop-entry command-line quoting for paths with spaces.
+  # TryExec is a single filename/path value, so quoting it can make launchers
+  # look for a literal path that includes quote characters.
   # Icon paths with spaces should work without quotes per desktop file spec,
   # but we ensure proper formatting.
   local content
@@ -935,7 +937,7 @@ Type=Application
 Name=$pretty
 Comment=AppImage
 Exec="$exec_path" %U
-TryExec="$exec_path"
+TryExec=$exec_path
 Terminal=false
 Categories=Utility;
 StartupNotify=true
