@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.2.1"
+VERSION="1.3.0"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -1180,6 +1180,9 @@ $(color_cyan "COMMANDS:")
       and guides users to enable it if available. Prefer enabling userns via sysctl instead.
       With $(color_yellow "--revert"), removes extracted version and reverts to AppImage.
 
+  $(color_green "health") [APP_ID]
+      Check appi's environment and installed app integration.
+
   $(color_green "uninstall") <APP_ID> [$(color_yellow "--purge")] [$(color_yellow "--no-prompt")]
       Remove desktop entry and bin link. Keeps versions by default.
       With $(color_yellow "--purge"), removes <root>/<app_id> entirely.
@@ -1229,6 +1232,8 @@ $(color_cyan "EXAMPLES:")
   $PROG $(color_green "fix") gimp $(color_yellow "--revert")
   $PROG $(color_green "fix") $(color_yellow "--check")
   $PROG $(color_green "fix") $(color_yellow "--check") gimp
+  $PROG $(color_green "health")
+  $PROG $(color_green "health") gimp
   $PROG $(color_green "size")
   $PROG $(color_green "size") gimp
   $PROG $(color_green "uninstall") gimp
@@ -1373,6 +1378,24 @@ $(color_cyan "EXAMPLES:")
   $PROG fix --check gimp
   $PROG fix gimp --extract
   $PROG fix gimp --revert
+EOF
+      ;;
+    health)
+      cat <<EOF
+$PROG health - Check appi health
+
+$(color_cyan "USAGE:")
+  $PROG health [APP_ID]
+
+Checks global dependencies and integration paths, then runs the per-app checks
+used by $PROG fix --check. With APP_ID, only that app is checked.
+
+$(color_cyan "OPTIONS:")
+  $(color_yellow "-h"), $(color_yellow "--help")  Show this help
+
+$(color_cyan "EXAMPLES:")
+  $PROG health
+  $PROG health gimp
 EOF
       ;;
     uninstall)
@@ -1945,10 +1968,10 @@ cmd_fix_check_app() {
   local current_link="$app_dir/current"
   if [[ ! -e "$current_link" && ! -L "$current_link" ]]; then
     print_check error "missing current symlink"
-    (( CHECK_ERRORS++ ))
+    ((++CHECK_ERRORS))
   elif [[ -L "$current_link" && ! -e "$current_link" ]]; then
     print_check error "dangling current symlink (target missing)"
-    (( CHECK_ERRORS++ ))
+    ((++CHECK_ERRORS))
   else
     print_check pass "current symlink valid"
   fi
@@ -1960,13 +1983,13 @@ cmd_fix_check_app() {
   fi
   if (( version_count == 0 )); then
     print_check error "empty versions directory"
-    (( CHECK_ERRORS++ ))
+    ((++CHECK_ERRORS))
   fi
 
   local wrapper="$app_dir/run"
   if [[ ! -f "$wrapper" ]]; then
     print_check warn "run wrapper missing (fix: appi refresh $id)"
-    (( CHECK_WARNINGS++ ))
+    ((++CHECK_WARNINGS))
   else
     print_check pass "run wrapper exists"
   fi
@@ -1974,9 +1997,17 @@ cmd_fix_check_app() {
   local desktop_install="$HOME/.local/share/applications/$id.desktop"
   if [[ ! -f "$desktop_install" ]]; then
     print_check warn "desktop entry missing (fix: appi refresh $id)"
-    (( CHECK_WARNINGS++ ))
+    ((++CHECK_WARNINGS))
   else
     print_check pass "desktop entry installed"
+    if have_cmd desktop-file-validate; then
+      if desktop-file-validate "$desktop_install" >/dev/null 2>&1; then
+        print_check pass "desktop entry valid"
+      else
+        print_check warn "desktop entry failed validation (fix: appi refresh $id)"
+        ((++CHECK_WARNINGS))
+      fi
+    fi
   fi
 
   if [[ -e "$current_link" ]]; then
@@ -1988,7 +2019,7 @@ cmd_fix_check_app() {
     fi
     if [[ -f "$appimage_path" && ! -x "$appimage_path" ]]; then
       print_check warn "AppImage not executable (fix: chmod +x $appimage_path)"
-      (( CHECK_WARNINGS++ ))
+      ((++CHECK_WARNINGS))
     elif [[ -f "$appimage_path" ]]; then
       print_check pass "AppImage executable"
     fi
@@ -2009,7 +2040,7 @@ cmd_fix_check_app() {
         current_checksum="$(compute_checksum "$appimage_path" 2>/dev/null || true)"
         if [[ -n "$current_checksum" ]] && ! extracted_marker_matches "$app_dir" "$current_checksum"; then
           print_check warn "extracted out of sync (fix: appi fix $id --extract)"
-          (( CHECK_WARNINGS++ ))
+          ((++CHECK_WARNINGS))
         else
           print_check pass "extracted version in sync"
         fi
@@ -2019,8 +2050,158 @@ cmd_fix_check_app() {
 
   if has_chrome_sandbox_fix "$app_dir" && [[ ! -d "$squashfs_root" ]]; then
     print_check warn "chrome-sandbox marker orphan (fix: appi fix $id --revert)"
-    (( CHECK_WARNINGS++ ))
+    ((++CHECK_WARNINGS))
   fi
+}
+
+run_app_health_checks() {
+  local target="${1:-}"
+
+  HEALTH_APP_COUNT=0
+  HEALTH_APP_ERRORS=0
+  HEALTH_APP_WARNINGS=0
+  CHECK_ERRORS=0
+  CHECK_WARNINGS=0
+
+  if [[ -n "$target" ]]; then
+    local id
+    id="$(normalize_app_id "$target")"
+    local app_dir="$ROOT/$id"
+    [[ -d "$app_dir" ]] || die "not installed: $id"
+
+    cmd_fix_check_app "$id"
+    HEALTH_APP_COUNT=1
+    HEALTH_APP_ERRORS=$CHECK_ERRORS
+    HEALTH_APP_WARNINGS=$CHECK_WARNINGS
+    return 0
+  fi
+
+  [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
+
+  local d app_id
+  for d in "$ROOT"/*; do
+    [[ -d "$d" ]] || continue
+    app_id="$(basename "$d")"
+    [[ -e "$d/current" || -L "$d/current" ]] || continue
+
+    HEALTH_APP_COUNT=$((HEALTH_APP_COUNT + 1))
+    log ""
+    cmd_fix_check_app "$app_id"
+    HEALTH_APP_ERRORS=$((HEALTH_APP_ERRORS + CHECK_ERRORS))
+    HEALTH_APP_WARNINGS=$((HEALTH_APP_WARNINGS + CHECK_WARNINGS))
+  done
+}
+
+health_pass() {
+  print_check pass "$1"
+}
+
+health_warn() {
+  print_check warn "$1"
+  ((++HEALTH_GLOBAL_WARNINGS))
+}
+
+health_error() {
+  print_check error "$1"
+  ((++HEALTH_GLOBAL_ERRORS))
+}
+
+cmd_health_check_global() {
+  HEALTH_GLOBAL_ERRORS=0
+  HEALTH_GLOBAL_WARNINGS=0
+
+  log "Environment:"
+
+  if [[ -d "$ROOT" ]]; then
+    if [[ -w "$ROOT" ]]; then
+      health_pass "apps root writable: $ROOT"
+    else
+      health_warn "apps root is not writable: $ROOT"
+    fi
+  else
+    health_warn "apps root missing (install will create it): $ROOT"
+  fi
+
+  if have_cmd sha256sum; then
+    health_pass "checksum tool available: sha256sum"
+  elif have_cmd shasum; then
+    health_pass "checksum tool available: shasum"
+  elif have_cmd openssl; then
+    health_pass "checksum tool available: openssl"
+  else
+    health_error "no checksum tool found (need sha256sum, shasum, or openssl)"
+  fi
+
+  if have_cmd curl && have_cmd wget; then
+    health_pass "download tools available: curl, wget"
+  elif have_cmd curl; then
+    health_pass "download tool available: curl"
+  elif have_cmd wget; then
+    health_pass "download tool available: wget"
+  else
+    health_warn "no download tool found (URL install/update need curl or wget)"
+  fi
+
+  if have_cmd jq; then
+    health_pass "jq available for GitHub update parsing"
+  else
+    health_warn "jq missing; portable JSON fallback will be used"
+  fi
+
+  if has_fuse2_support; then
+    health_pass "FUSE 2 detected for direct AppImage runs"
+  else
+    health_warn "FUSE 2 (libfuse.so.2) missing; use libfuse2t64/libfuse2 or appi fix APP_ID --extract"
+  fi
+
+  local desktop_dir="$HOME/.local/share/applications"
+  if [[ -d "$desktop_dir" ]]; then
+    if [[ -w "$desktop_dir" ]]; then
+      health_pass "desktop applications dir writable: $desktop_dir"
+    else
+      health_warn "desktop applications dir is not writable: $desktop_dir"
+    fi
+  else
+    health_warn "desktop applications dir missing (install/refresh will create it): $desktop_dir"
+  fi
+
+  local bin_dir="$HOME/.local/bin"
+  if [[ -d "$bin_dir" ]]; then
+    if path_contains_dir "$bin_dir"; then
+      health_pass "CLI bin dir is on PATH: $bin_dir"
+    else
+      health_warn "CLI bin dir exists but is not on PATH: $bin_dir"
+    fi
+  else
+    health_warn "CLI bin dir missing; auto bin links will be skipped: $bin_dir"
+  fi
+
+  if have_cmd desktop-file-validate; then
+    health_pass "desktop-file-validate available"
+  else
+    log "  note: desktop-file-validate not found; skipping desktop entry validation"
+  fi
+
+  if have_cmd rofi; then
+    health_pass "rofi detected"
+    log "  note: if new launchers do not show in rofi drun, clear ~/.cache/rofi*drun*"
+  fi
+}
+
+cmd_health() {
+  local target="${1:-}"
+  if is_help_arg "$target"; then command_help health; return 0; fi
+  [[ "$target" == -* ]] && die "Unknown health option: $target"
+  [[ -z "${2:-}" ]] || die "health accepts at most APP_ID"
+
+  cmd_health_check_global
+
+  log ""
+  log "Installed apps:"
+  run_app_health_checks "$target"
+
+  log ""
+  log "Summary: $HEALTH_APP_COUNT app(s) checked, $((HEALTH_GLOBAL_ERRORS + HEALTH_APP_ERRORS)) error(s), $((HEALTH_GLOBAL_WARNINGS + HEALTH_APP_WARNINGS)) warning(s)"
 }
 
 cmd_fix() {
@@ -2058,44 +2239,10 @@ cmd_fix() {
 
   if (( check )); then
     log "Checking installed apps..."
-    log ""
-
-    local total_apps=0
-    local total_errors=0
-    local total_warnings=0
-
-    # Global variables set by cmd_fix_check_app
-    CHECK_ERRORS=0
-    CHECK_WARNINGS=0
-
-    if [[ -n "$id" ]]; then
-      id="$(normalize_app_id "$id")"
-      local app_dir="$ROOT/$id"
-      [[ -d "$app_dir" ]] || die "not installed: $id"
-
-      cmd_fix_check_app "$id"
-      total_apps=1
-      total_errors=$CHECK_ERRORS
-      total_warnings=$CHECK_WARNINGS
-    else
-      [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
-
-      for d in "$ROOT"/*; do
-        [[ -d "$d" ]] || continue
-        local app_id
-        app_id="$(basename "$d")"
-        [[ -e "$d/current" || -L "$d/current" ]] || continue
-
-        total_apps=$((total_apps + 1))
-        log ""
-        cmd_fix_check_app "$app_id"
-        total_errors=$((total_errors + CHECK_ERRORS))
-        total_warnings=$((total_warnings + CHECK_WARNINGS))
-      done
-    fi
+    run_app_health_checks "$id"
 
     log ""
-    log "Summary: $total_apps app(s) checked, $total_errors error(s), $total_warnings warning(s)"
+    log "Summary: $HEALTH_APP_COUNT app(s) checked, $HEALTH_APP_ERRORS error(s), $HEALTH_APP_WARNINGS warning(s)"
     return 0
   fi
 
@@ -2379,7 +2526,7 @@ cmd_clean() {
       if [[ "$f_basename" != "$current_basename" ]]; then
         run_cmd rm -f "$f"
         remove_checksum_entry "$app_dir" "$f_basename"
-        (( removed++ ))
+        ((++removed))
         vlog "Removed old version: $f_basename"
       fi
     done < <(find "$versions_dir" -type f \( -name "*.AppImage" -o -name "*.appimage" \) -print0 2>/dev/null || true)
@@ -2898,10 +3045,10 @@ cmd_update() {
       log ""
       log "$(color_cyan "=== Updating: $id ===")"
       if cmd_update_app "$id" "$force" 2>&1; then
-        (( updated++ ))
+        ((++updated))
       else
         warn "Failed to update: $id"
-        (( failed++ ))
+        ((++failed))
       fi
     done
 
@@ -2965,6 +3112,7 @@ case "$cmd" in
   info)      cmd_info "${REMAIN[@]:1}" ;;
   run)       cmd_run "${REMAIN[@]:1}" ;;
   fix)       cmd_fix "${REMAIN[@]:1}" ;;
+  health)    cmd_health "${REMAIN[@]:1}" ;;
   size)      cmd_size "${REMAIN[@]:1}" ;;
   uninstall) cmd_uninstall "${REMAIN[@]:1}" ;;
   clean)     cmd_clean "${REMAIN[@]:1}" ;;
