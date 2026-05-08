@@ -15,7 +15,7 @@ set -euo pipefail
 #   ~/.local/bin/<app_id> -> <root>/<app_id>/current
 
 PROG="appi"
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 ROOT_DEFAULT="${APPI_ROOT:-$HOME/Apps}"
 ROOT="$ROOT_DEFAULT"
@@ -29,16 +29,11 @@ NO_COLOR_FLAG=0
 # Used by `update` to ensure EXIT trap cleanup still works after `cmd_update` returns.
 APPI_UPDATE_TMP_FILE=""
 
-# Flag to warn once when jq is missing
 JQ_MISSING_WARNED=0
 
 # ---------- color support ----------
 
 init_color() {
-  # Enable color if:
-  # 1. Output is a TTY
-  # 2. NO_COLOR environment variable is not set
-  # 3. --no-color flag was not provided
   if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]] && (( !NO_COLOR_FLAG )); then
     USE_COLOR=1
   else
@@ -104,14 +99,44 @@ ensure_dir() { run_cmd mkdir -p "$1"; }
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# Check if unprivileged user namespaces are available
-# Returns 0 if userns is available, 1 if disabled
+has_fuse2_support() {
+  if have_cmd ldconfig; then
+    local ldconfig_out
+    ldconfig_out="$(ldconfig -p 2>/dev/null || true)"
+    [[ "$ldconfig_out" == *"libfuse.so.2"* ]] && return 0
+  fi
+
+  local path
+  for path in \
+    /usr/lib/x86_64-linux-gnu/libfuse.so.2 \
+    /usr/lib/aarch64-linux-gnu/libfuse.so.2 \
+    /usr/lib/libfuse.so.2 \
+    /lib/x86_64-linux-gnu/libfuse.so.2 \
+    /lib/aarch64-linux-gnu/libfuse.so.2 \
+    /lib/libfuse.so.2; do
+    [[ -f "$path" ]] && return 0
+  done
+
+  return 1
+}
+
+path_contains_dir() {
+  local dir="$1"
+  local entry
+  local -a path_entries
+  dir="${dir%/}"
+  IFS=':' read -r -a path_entries <<<"${PATH:-}"
+  for entry in "${path_entries[@]}"; do
+    entry="${entry%/}"
+    [[ "$entry" == "$dir" ]] && return 0
+  done
+  return 1
+}
+
 check_userns_support() {
   unshare --user --map-root-user true 2>/dev/null
 }
 
-# Print guidance on enabling unprivileged user namespaces
-# Returns 0 if userns was successfully enabled, 1 otherwise
 print_userns_guidance() {
   log ""
   log "$(color_cyan "Unprivileged user namespaces are disabled on this system.")"
@@ -120,9 +145,7 @@ print_userns_guidance() {
   log "Enabling userns is the recommended approach (distributions have mitigations)."
   log ""
 
-  # Detect which sysctl parameters exist to provide distribution-specific guidance
   if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
-    # Ubuntu 23.10+ - AppArmor-based restriction
     log "$(color_yellow "Ubuntu detected (AppArmor-based restriction).")"
     log ""
     log "On Ubuntu 24.04+, the kernel allows userns by default"
@@ -140,7 +163,6 @@ print_userns_guidance() {
     log "    echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-userns.conf"
     log ""
     
-    # Offer interactive execution of temporary command
     if (( !DRY_RUN )) && [[ -t 0 ]]; then
       echo -n "Would you like appi to enable userns temporarily (until reboot)? [y/N] " >&2
       local ans=""
@@ -163,7 +185,6 @@ print_userns_guidance() {
       return 1
     fi
   elif [[ -f /proc/sys/kernel/unprivileged_userns_clone ]]; then
-    # Debian - kernel parameter controls userns
     log "$(color_yellow "Debian detected.")"
     log ""
     log "$(color_yellow "To enable temporarily (until reboot):")"
@@ -173,7 +194,6 @@ print_userns_guidance() {
     log "  echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/99-userns.conf"
     log ""
     
-    # Offer interactive execution of temporary command
     if (( !DRY_RUN )) && [[ -t 0 ]]; then
       echo -n "Would you like appi to enable userns temporarily (until reboot)? [y/N] " >&2
       local ans=""
@@ -196,7 +216,6 @@ print_userns_guidance() {
       return 1
     fi
   else
-    # Other distributions - check user.max_user_namespaces
     log "$(color_yellow "Other distribution detected.")"
     log ""
     log "Check if user namespaces are limited:"
@@ -225,7 +244,6 @@ is_github_url() {
   [[ "$1" =~ ^https?://github\.com/ ]]
 }
 
-# Get the system architecture in a normalized form for AppImage matching
 get_system_arch() {
   local arch
   arch="$(uname -m)"
@@ -238,26 +256,20 @@ get_system_arch() {
   esac
 }
 
-# Check if an AppImage filename matches or is compatible with system architecture
-# Returns 0 (true) if compatible, 1 (false) if incompatible
 is_appimage_arch_compatible() {
   local filename="$1"
   local system_arch
   system_arch="$(get_system_arch)"
   local filename_lower="${filename,,}"
 
-  # Define architecture patterns to look for in filenames
-  # These are common naming conventions used in AppImage releases
   local -a x86_64_patterns=("x86_64" "x86-64" "amd64" "linux64" "-64bit")
   local -a aarch64_patterns=("aarch64" "arm64" "armv8")
   local -a armhf_patterns=("armhf" "armv7" "arm32")
   local -a i686_patterns=("i686" "i386" "x86" "linux32" "-32bit")
 
-  # Check if filename contains any architecture indicator
   local has_arch_indicator=0
   local filename_arch=""
 
-  # Check for x86_64 patterns
   for pattern in "${x86_64_patterns[@]}"; do
     if [[ "$filename_lower" == *"$pattern"* ]]; then
       has_arch_indicator=1
@@ -266,7 +278,6 @@ is_appimage_arch_compatible() {
     fi
   done
 
-  # Check for aarch64 patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${aarch64_patterns[@]}"; do
       if [[ "$filename_lower" == *"$pattern"* ]]; then
@@ -277,7 +288,6 @@ is_appimage_arch_compatible() {
     done
   fi
 
-  # Check for armhf patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${armhf_patterns[@]}"; do
       if [[ "$filename_lower" == *"$pattern"* ]]; then
@@ -288,7 +298,6 @@ is_appimage_arch_compatible() {
     done
   fi
 
-  # Check for i686 patterns
   if [[ -z "$filename_arch" ]]; then
     for pattern in "${i686_patterns[@]}"; do
       if [[ "$filename_lower" == *"$pattern"* ]]; then
@@ -304,7 +313,6 @@ is_appimage_arch_compatible() {
     return 0
   fi
 
-  # Check if the detected architecture matches our system
   if [[ "$filename_arch" == "$system_arch" ]]; then
     return 0
   fi
@@ -314,7 +322,6 @@ is_appimage_arch_compatible() {
     return 0
   fi
 
-  # Not compatible
   return 1
 }
 
@@ -323,18 +330,14 @@ is_appimage_arch_compatible() {
 json_get_string() {
   local json="$1"
   local key="$2"
-  # Try jq first (most reliable)
   if have_cmd jq; then
     echo "$json" | jq -r ".$key // empty" 2>/dev/null
     return
   fi
-  # Warn once if jq is missing
   if (( !JQ_MISSING_WARNED )); then
     warn "jq not found - using portable JSON parsing fallback (install jq for better reliability)"
     JQ_MISSING_WARNED=1
   fi
-  # Fallback: sed -E for portable JSON parsing (handles "key": "value")
-  # Match: "key" : "value" and capture the value part
   echo "$json" | sed -E -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\\1/p" | head -n1
 }
 
@@ -342,16 +345,9 @@ json_get_string() {
 # Handles: github.com/owner/repo/... and strips trailing .git
 extract_github_owner_repo() {
   local url="$1"
-  # Extract owner/repo from URL patterns like:
-  #   https://github.com/owner/repo/releases/download/v1.0/file.AppImage
-  #   https://github.com/owner/repo/releases/latest/download/file.AppImage
-  #   https://github.com/owner/repo
-  #   https://github.com/owner/repo.git
-  # Always returns owner/repo (strips .git suffix and ignores extra path segments)
   if [[ "$url" =~ github\.com/([^/]+)/([^/]+) ]]; then
     local owner="${BASH_REMATCH[1]}"
     local repo="${BASH_REMATCH[2]}"
-    # Strip trailing .git if present
     repo="${repo%.git}"
     echo "$owner/$repo"
   fi
@@ -370,11 +366,9 @@ get_github_latest_appimage() {
 
   local api_url="https://api.github.com/repos/$owner_repo/releases/latest"
 
-  # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
     download_cmd=(curl -fSL)
-    # Add GitHub token if available (helps with rate limiting)
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
       download_cmd+=(-H "Authorization: token $GITHUB_TOKEN")
     fi
@@ -404,17 +398,14 @@ get_github_latest_appimage() {
   vlog "System architecture: $system_arch"
 
   if have_cmd jq; then
-    # Use jq to find all .AppImage assets
     while IFS= read -r url; do
       [[ -n "$url" ]] && all_urls+=("$url")
     done < <(echo "$response" | jq -r '.assets[] | select(.name | test("\\.AppImage$"; "i")) | .browser_download_url' 2>/dev/null)
   else
-    # Warn once if jq is missing
     if (( !JQ_MISSING_WARNED )); then
       warn "jq not found - using portable JSON parsing fallback (install jq for better reliability)"
       JQ_MISSING_WARNED=1
     fi
-    # Fallback: sed -E for portable JSON parsing - extract browser_download_url values ending in .AppImage
     while IFS= read -r url; do
       [[ -n "$url" ]] && all_urls+=("$url")
     done < <(echo "$response" | sed -E -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]*\.AppImage)".*/\1/p' 2>/dev/null)
@@ -426,7 +417,6 @@ get_github_latest_appimage() {
 
   vlog "Found ${#all_urls[@]} AppImage asset(s)"
 
-  # Filter and prioritize by architecture
   local -a compatible_urls=()
   local -a preferred_urls=()
 
@@ -437,7 +427,6 @@ get_github_latest_appimage() {
     if is_appimage_arch_compatible "$filename"; then
       compatible_urls+=("$url")
 
-      # Check if this one explicitly matches our architecture (preferred)
       local filename_lower="${filename,,}"
       case "$system_arch" in
         x86_64)
@@ -476,7 +465,6 @@ get_github_latest_appimage() {
     appimage_url="${compatible_urls[0]}"
     vlog "Selected compatible AppImage: $(basename "${appimage_url%%\?*}")"
   else
-    # All AppImages were for incompatible architectures
     die "No compatible AppImage found for $system_arch architecture in latest release of $owner_repo"
   fi
 
@@ -506,7 +494,6 @@ download_file() {
   local url="$1"
   local output_file="$2"
 
-  # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
     download_cmd=(curl -fSL)
@@ -534,10 +521,8 @@ download_file() {
     die "Failed to download from URL: $url"
   fi
 
-  # Verify it's not empty
   [[ -s "$tmp_file" ]] || { rm -f "$tmp_file"; die "Downloaded file is empty"; }
 
-  # Move to final location
   mv -f "$tmp_file" "$output_file" || { rm -f "$tmp_file"; die "Failed to save downloaded file"; }
 }
 
@@ -631,7 +616,6 @@ apply_chrome_sandbox_fix() {
   local squashfs_root="$2"
   local skip_prompt="${3:-0}"  # Optional: skip prompt for auto-reapplication
 
-  # Find chrome-sandbox
   local sandbox_path
   sandbox_path="$(find "$squashfs_root" -name "chrome-sandbox" -type f 2>/dev/null | head -n1)"
 
@@ -646,7 +630,6 @@ apply_chrome_sandbox_fix() {
 
   log "Found chrome-sandbox at: $sandbox_path"
 
-  # Set SUID bit (requires sudo)
   if (( DRY_RUN )); then
     log "[dry-run] sudo chown root:root $sandbox_path"
     log "[dry-run] sudo chmod 4755 $sandbox_path"
@@ -660,7 +643,6 @@ apply_chrome_sandbox_fix() {
     log "Set SUID bit on chrome-sandbox"
   fi
 
-  # Write marker to track that fix was applied
   write_chrome_sandbox_marker "$app_dir"
   return 0
 }
@@ -687,11 +669,9 @@ extract_appimage() {
     return 0
   fi
 
-  # Clean any previous failed extraction attempt
   rm -rf "$temp_extract_dir"
   mkdir -p "$temp_extract_dir"
 
-  # Extract to temporary location first
   # AppImage --appimage-extract always creates "squashfs-root" in current directory
   if ! ( cd "$temp_extract_dir" && "$appimage_path" --appimage-extract >/dev/null 2>&1 ); then
     rm -rf "$temp_extract_dir"
@@ -703,7 +683,6 @@ extract_appimage() {
     fi
   fi
 
-  # Verify extraction created squashfs-root with AppRun
   if [[ ! -d "$temp_squashfs_root" ]]; then
     rm -rf "$temp_extract_dir"
     if [[ -d "$squashfs_root" ]]; then
@@ -730,7 +709,6 @@ extract_appimage() {
     rm -rf "$squashfs_root"
   fi
 
-  # Move new extraction into place
   mv "$temp_squashfs_root" "$squashfs_root"
   rm -rf "$temp_extract_dir"
 
@@ -758,14 +736,12 @@ store_checksum() {
     return 0
   fi
 
-  # Remove existing entry for this filename if any, then append new one
   if [[ -f "$checksum_file" ]]; then
     # Use awk for literal string matching to avoid regex metacharacter issues
     awk -v fn="$filename" '!($1 ~ /^[0-9a-f]{64}$/ && $2 == fn)' "$checksum_file" >"$checksum_file.tmp" 2>/dev/null || true
     mv -f "$checksum_file.tmp" "$checksum_file" 2>/dev/null || true
   fi
 
-  # Append new entry: checksum (64 hex chars) + 2 spaces + filename
   printf "%s  %s\n" "$checksum" "$filename" >>"$checksum_file"
 }
 
@@ -779,18 +755,15 @@ find_existing_by_checksum() {
     return 1
   fi
 
-  # Look for matching checksum in stored entries
   local match
   match="$(grep "^$checksum  " "$checksum_file" 2>/dev/null | head -n1 || true)"
   if [[ -z "$match" ]]; then
     return 1
   fi
 
-  # Extract filename (everything after checksum + 2 spaces)
   local filename
   filename="${match#*  }"
 
-  # Verify the file still exists
   local full_path="$app_dir/versions/$filename"
   if [[ -f "$full_path" ]]; then
     echo "$filename"
@@ -854,11 +827,9 @@ read_source_url() {
 }
 
 pretty_name() {
-  # app_id -> Title Case-ish
   local s="$1"
   s="${s//_/ }"
   s="${s//-/ }"
-  # capitalize each word's first char (best-effort)
   awk '{
     for (i=1;i<=NF;i++){
       $i=toupper(substr($i,1,1)) substr($i,2)
@@ -869,8 +840,7 @@ pretty_name() {
 
 normalize_app_id() {
   local id="$1"
-  id="${id,,}" # lowercase
-  # allow a-z 0-9 and dashes only
+  id="${id,,}"
   if [[ ! "$id" =~ ^[a-z0-9]+([a-z0-9-]*[a-z0-9])?$ ]]; then
     die "Invalid app_id '$id' (allowed: lowercase letters, digits, dashes; must start/end with alnum)"
   fi
@@ -884,7 +854,6 @@ infer_app_id_from_filename() {
   b="${b%.AppImage}"
   b="${b%.appimage}"
   b="${b,,}"
-  # replace non-alnum with dash, collapse repeats, trim
   b="$(sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' <<<"$b")"
   [[ -n "$b" ]] || die "Could not infer app_id from filename"
   echo "$b"
@@ -927,8 +896,7 @@ write_desktop_file() {
   # NOTE: Exec uses desktop-entry command-line quoting for paths with spaces.
   # TryExec is a single filename/path value, so quoting it can make launchers
   # look for a literal path that includes quote characters.
-  # Icon paths with spaces should work without quotes per desktop file spec,
-  # but we ensure proper formatting.
+  # Icon paths with spaces work unquoted per desktop-entry spec.
   local content
   content=$(
     cat <<EOF
@@ -945,7 +913,6 @@ EOF
   )
 
   if [[ -f "$icon_path" ]]; then
-    # Icon path - desktop spec allows spaces without quotes, but ensure it's properly formatted
     content+=$'\n'"Icon=$icon_path"
   fi
 
@@ -953,7 +920,6 @@ EOF
     log "[dry-run] write $app_copy"
     log "[dry-run] write $desktop_install"
   else
-    # Write atomically via temp+mv for both files
     local tmp_app_copy
     tmp_app_copy="$(mktemp "$(dirname "$app_copy")/.desktop.XXXXXX")" || die "Failed to create temp file for desktop entry"
     printf "%s\n" "$content" >"$tmp_app_copy"
@@ -978,7 +944,6 @@ maybe_extract_icon() {
 
   ensure_dir "$app_dir/icons"
 
-  # best-effort: requires AppImage to support --appimage-extract
   if (( DRY_RUN )); then
     log "[dry-run] icon extract (best-effort) for $id"
     return 0
@@ -1001,7 +966,6 @@ maybe_extract_icon() {
   local best=""
   local best_score=-1
 
-  # Candidates: hicolor icons and pixmaps
   while IFS= read -r -d '' f; do
     local score=0
     if [[ "$f" =~ /hicolor/([0-9]+)x([0-9]+)/apps/ ]]; then
@@ -1016,7 +980,6 @@ maybe_extract_icon() {
       -path "*/usr/share/pixmaps/*.png" \
     \) -print0 2>/dev/null || true)
 
-  # Fallback: .DirIcon
   if [[ -z "$best" && -e "$root/.DirIcon" ]]; then
     best="$root/.DirIcon"
   fi
@@ -1051,6 +1014,35 @@ maybe_link_bin() {
   vlog "Bin link -> $link"
 }
 
+print_install_followup() {
+  local id="$1"
+  local link_mode="$2"
+  local app_dir="$ROOT/$id"
+  local bin_dir="$HOME/.local/bin"
+  local bin_link="$bin_dir/$id"
+  local extracted_app="$app_dir/extracted/squashfs-root/AppRun"
+
+  log ""
+  log "Run with: $PROG run $id"
+
+  if [[ "$link_mode" != "off" && ( -L "$bin_link" || -e "$bin_link" ) ]]; then
+    if path_contains_dir "$bin_dir"; then
+      log "CLI shortcut: $id"
+    else
+      warn "CLI shortcut created at $bin_link, but $bin_dir is not in PATH."
+      warn "Use '$PROG run $id' or add $bin_dir to PATH."
+    fi
+  elif [[ "$link_mode" == "auto" && ! -d "$bin_dir" ]]; then
+    log "CLI shortcut skipped because $bin_dir does not exist."
+    log "Use '$PROG run $id' or create $bin_dir and install with --link."
+  fi
+
+  if [[ ! -x "$extracted_app" ]] && ! has_fuse2_support; then
+    warn "FUSE 2 (libfuse.so.2) was not detected; direct AppImage runs may fail."
+    warn "Install libfuse2t64/libfuse2, or run: $PROG fix $id --extract"
+  fi
+}
+
 unlink_bin() {
   local id="$1"
   local link="$HOME/.local/bin/$id"
@@ -1079,16 +1071,14 @@ ensure_run_wrapper() {
     return 0
   fi
 
-  cat >"$wrapper" <<'EOF'
+cat >"$wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-# Resolve symlinks to get the actual script location
 SCRIPT="$0"
 while [[ -L "$SCRIPT" ]]; do
   if command -v readlink >/dev/null 2>&1; then
     SCRIPT="$(readlink "$SCRIPT")"
   else
-    # Fallback: manual symlink resolution
     SCRIPT="$(ls -l "$SCRIPT" 2>/dev/null | sed -e 's/.* -> //' || echo "$SCRIPT")"
   fi
   [[ "$SCRIPT" != /* ]] && SCRIPT="$(dirname "$0")/$SCRIPT"
@@ -1096,10 +1086,8 @@ done
 APPDIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
 if [[ -x "$APPDIR/extracted/squashfs-root/AppRun" ]]; then
   echo "Using extracted AppRun at $APPDIR/extracted/squashfs-root/AppRun" >&2
-  # Preserve argv[0] when executing extracted AppRun
   exec -a "$0" "$APPDIR/extracted/squashfs-root/AppRun" "$@"
 fi
-# Check for FUSE before running AppImage
 fuse_found=0
 if command -v ldconfig >/dev/null 2>&1; then
   if ldconfig -p 2>/dev/null | grep -q libfuse.so.2; then
@@ -1107,7 +1095,6 @@ if command -v ldconfig >/dev/null 2>&1; then
   fi
 fi
 if (( !fuse_found )); then
-  # Fallback check: look for libfuse.so.2 in common locations
   for path in /usr/lib/x86_64-linux-gnu/libfuse.so.2 /usr/lib/aarch64-linux-gnu/libfuse.so.2 /usr/lib/libfuse.so.2 /lib/x86_64-linux-gnu/libfuse.so.2 /lib/aarch64-linux-gnu/libfuse.so.2 /lib/libfuse.so.2; do
     [[ -f "$path" ]] && { fuse_found=1; break; }
   done
@@ -1121,7 +1108,6 @@ if [[ -L "$APPIMAGE_PATH" ]]; then
   if command -v readlink >/dev/null 2>&1 && readlink -f "$APPIMAGE_PATH" >/dev/null 2>&1; then
     APPIMAGE_PATH="$(readlink -f "$APPIMAGE_PATH")"
   else
-    # Fallback: manual symlink resolution
     while [[ -L "$APPIMAGE_PATH" ]]; do
       APPIMAGE_PATH="$(cd "$(dirname "$APPIMAGE_PATH")" && ls -l "$APPIMAGE_PATH" 2>/dev/null | sed -e 's/.* -> //' || echo "$APPIMAGE_PATH")"
       [[ "$APPIMAGE_PATH" != /* ]] && APPIMAGE_PATH="$(cd "$(dirname "$APPIMAGE_PATH")" && pwd)/$APPIMAGE_PATH"
@@ -1129,7 +1115,6 @@ if [[ -L "$APPIMAGE_PATH" ]]; then
   fi
 fi
 echo "Using AppImage at $APPIMAGE_PATH" >&2
-# Preserve argv[0] when executing AppImage
 exec -a "$0" "$APPDIR/current" "$@"
 EOF
   chmod +x "$wrapper"
@@ -1151,7 +1136,6 @@ print_check() {
 # ---------- commands ----------
 
 usage() {
-  # Initialize color support if not already done (needed when called from --help)
   init_color
   cat <<EOF
 $PROG — User-space AppImage layout + desktop integration (no daemon, no root for normal install/run; some fixes require sudo)
@@ -1495,7 +1479,6 @@ cmd_install() {
   local download_url=""
   local temp_file=""
 
-  # Parse options first
   while (( $# )); do
     case "$1" in
       -h|--help) command_help install; return 0 ;;
@@ -1512,44 +1495,31 @@ cmd_install() {
     shift || true
   done
 
-  # Determine if we need to download
   if is_url "$file"; then
-    # Positional argument is a URL
     download_url="$file"
-    # If --source-url was also provided, use it for metadata, otherwise use download URL
     [[ -z "$source_url" ]] && source_url="$download_url"
   elif [[ -n "$source_url" ]] && ! [[ -f "$file" ]]; then
-    # --source-url provided but no file exists - download mode
     download_url="$source_url"
-    # source_url already set, will be used for metadata
   fi
 
-  # Download if needed
   if [[ -n "$download_url" ]]; then
-    # Create temporary file for download
     temp_file="$(mktemp)" || die "Failed to create temporary file"
-    # Cleanup temp file on exit
     trap 'rm -f "${temp_file:-}"' EXIT
 
-    # Infer filename from URL if possible, otherwise use temp name
     local url_filename
     url_filename="$(basename "${download_url%%\?*}")"
     if [[ "$url_filename" == *.AppImage || "$url_filename" == *.appimage ]]; then
-      # URL has AppImage extension, use it
       local temp_dir
       temp_dir="$(dirname "$temp_file")"
       rm -f "$temp_file"
       temp_file="$temp_dir/$url_filename"
     else
-      # No extension in URL, add .AppImage
       mv -f "$temp_file" "${temp_file}.AppImage" 2>/dev/null || true
       temp_file="${temp_file}.AppImage"
     fi
 
     download_file "$download_url" "$temp_file"
 
-    # Validate downloaded file is actually an AppImage
-    # Check extension first (quick check)
     local downloaded_base
     downloaded_base="$(basename "$temp_file")"
     if [[ "$downloaded_base" != *.AppImage && "$downloaded_base" != *.appimage ]]; then
@@ -1557,10 +1527,7 @@ cmd_install() {
       die "Downloaded file does not have AppImage extension"
     fi
 
-    # Basic validation: check if file is executable or at least a binary
-    # AppImages should be executable binaries
     if [[ ! -x "$temp_file" ]]; then
-      # Make it executable (AppImages should be)
       chmod +x "$temp_file" || {
         rm -f "$temp_file"
         die "Downloaded file cannot be made executable"
@@ -1568,11 +1535,9 @@ cmd_install() {
     fi
 
     file="$temp_file"
-    # Clear trap since we'll handle cleanup after install
     trap - EXIT
   fi
 
-  # Validate file exists (now it's either original file or downloaded temp file)
   [[ -f "$file" ]] || die "file not found: $file"
 
   if [[ -z "$id" ]]; then
@@ -1590,18 +1555,15 @@ cmd_install() {
   base="$(basename "$file")"
   [[ "$base" == *.AppImage || "$base" == *.appimage ]] || die "Not an AppImage filename (expected *.AppImage): $base"
 
-  # normalize extension casing
   if [[ "$base" == *.appimage ]]; then
     base="${base%.appimage}.AppImage"
   fi
 
-  # Compute checksum of source file to detect duplicates
   log "Computing checksum..."
   local source_checksum
   source_checksum="$(compute_checksum "$file")"
   vlog "Source checksum: $source_checksum"
 
-  # Check if this exact file already exists
   local existing_file
   existing_file="$(find_existing_by_checksum "$app_dir" "$source_checksum" || true)"
 
@@ -1611,8 +1573,6 @@ cmd_install() {
     log "Duplicate detected: identical file already exists as '$existing_file'"
     dest="$app_dir/versions/$existing_file"
     dest_basename="$existing_file"
-    # If using --move, remove the source file since it's a duplicate
-    # If it's a downloaded temp file, always remove it
     if [[ "$mode" == "move" ]] || [[ -n "$temp_file" ]]; then
       run_cmd rm -f "$file"
       if [[ -n "$temp_file" ]]; then
@@ -1621,11 +1581,9 @@ cmd_install() {
         log "Removed duplicate source file"
       fi
     fi
-    # Update current symlink to point to existing file
     run_cmd ln -sfn "versions/$existing_file" "$app_dir/current"
     log "Updated 'current' to point to existing file"
   else
-    # No duplicate found, proceed with normal installation
     dest="$(unique_target_path "$app_dir/versions" "$base")"
     dest_basename="$(basename "$dest")"
 
@@ -1637,14 +1595,11 @@ cmd_install() {
     fi
     run_cmd chmod +x "$dest"
 
-    # Store checksum for future duplicate detection
     store_checksum "$app_dir" "$dest_basename" "$source_checksum"
 
-    # Update current symlink (atomic-ish with ln -sfn)
     run_cmd ln -sfn "versions/$dest_basename" "$app_dir/current"
   fi
 
-  # Desktop + icon
   if (( icons )); then
     maybe_extract_icon "$id" || true
   fi
@@ -1669,18 +1624,16 @@ cmd_install() {
   write_desktop_file "$id"
   maybe_link_bin "$id" "$link_mode"
 
-  # Store source URL if provided
   if [[ -n "$source_url" ]]; then
     store_source_url "$app_dir" "$source_url"
   fi
 
-  # Clean up temporary file if we downloaded it and it still exists
-  # (It may have been moved or removed in duplicate detection)
   if [[ -n "$temp_file" && -f "$temp_file" ]]; then
     run_cmd rm -f "$temp_file"
   fi
 
   success "Done: $id"
+  print_install_followup "$id" "$link_mode"
 }
 
 cmd_refresh() {
@@ -1688,7 +1641,6 @@ cmd_refresh() {
   local icons=1
   local source_url=""
 
-  # If first arg looks like an option, treat as no app_id
   if [[ "${target:-}" =~ ^-- ]]; then
     target=""
   else
@@ -1722,7 +1674,6 @@ cmd_refresh() {
     return 0
   fi
 
-  # If --source-url is provided without an app_id, it's an error
   if [[ -n "$source_url" ]]; then
     die "--source-url requires an APP_ID (cannot be used when refreshing all apps)"
   fi
@@ -1846,19 +1797,16 @@ cmd_switch() {
   local versions_dir="$app_dir/versions"
   [[ -d "$versions_dir" ]] || die "No versions directory for: $id"
 
-  # Find matching version file
   local -a matches=()
   local -a all_versions=()
   while IFS= read -r -d '' f; do
     local base
     base="$(basename "$f")"
     all_versions+=("$base")
-    # Exact match takes priority
     if [[ "$base" == "$target" ]]; then
       matches=("$base")
       break
     fi
-    # Substring match (case-insensitive)
     if [[ "${base,,}" == *"${target,,}"* ]]; then
       matches+=("$base")
     fi
@@ -1877,7 +1825,6 @@ cmd_switch() {
   local match="${matches[0]}"
   local match_path="$versions_dir/$match"
 
-  # Check if already current
   local current_link="$app_dir/current"
   if [[ -L "$current_link" ]]; then
     local link_target
@@ -1888,11 +1835,9 @@ cmd_switch() {
     fi
   fi
 
-  # Update current symlink
   run_cmd ln -sfn "versions/$match" "$app_dir/current"
   log "Switched $id to: $match"
 
-  # Handle extracted version (re-extract if exists, reapply chrome-sandbox if needed)
   if [[ -d "$app_dir/extracted" ]]; then
     local new_checksum
     new_checksum="$(compute_checksum "$match_path")"
@@ -1902,7 +1847,6 @@ cmd_switch() {
     else
       log "Updating extracted version to match: $match"
       extract_appimage "$app_dir" "$match_path" "$new_checksum" "$match"
-      # If chrome-sandbox fix was previously applied, reapply it automatically
       if has_chrome_sandbox_fix "$app_dir"; then
         local squashfs_root="$app_dir/extracted/squashfs-root"
         log "Reapplying chrome-sandbox fix for switched version: $id"
@@ -1930,14 +1874,12 @@ cmd_info() {
   log "$(color_cyan "App:") $id"
   log "$(color_cyan "Location:") $app_dir"
 
-  # Current version
   local tgt=""
   if [[ -L "$current" ]]; then
     tgt="$(readlink "$current" 2>/dev/null || true)"
   fi
   log "$(color_cyan "Current:") ${tgt:-$current}"
 
-  # Extracted status
   if [[ -x "$app_dir/extracted/squashfs-root/AppRun" ]]; then
     log "$(color_cyan "Extracted:") yes"
     if has_chrome_sandbox_fix "$app_dir"; then
@@ -1947,7 +1889,6 @@ cmd_info() {
     log "$(color_cyan "Extracted:") no"
   fi
 
-  # Update method
   local update_script="$app_dir/meta/update.sh"
   local source_url
   source_url="$(read_source_url "$app_dir" || true)"
@@ -1964,7 +1905,6 @@ cmd_info() {
     log "$(color_cyan "Update:") not configured"
   fi
 
-  # Stored versions
   print_app_versions "$id"
 }
 
@@ -2002,7 +1942,6 @@ cmd_fix_check_app() {
   CHECK_ERRORS=0
   CHECK_WARNINGS=0
 
-  # Check 1: current symlink exists
   local current_link="$app_dir/current"
   if [[ ! -e "$current_link" && ! -L "$current_link" ]]; then
     print_check error "missing current symlink"
@@ -2014,7 +1953,6 @@ cmd_fix_check_app() {
     print_check pass "current symlink valid"
   fi
 
-  # Check 2: versions directory has files
   local versions_dir="$app_dir/versions"
   local version_count=0
   if [[ -d "$versions_dir" ]]; then
@@ -2025,7 +1963,6 @@ cmd_fix_check_app() {
     (( CHECK_ERRORS++ ))
   fi
 
-  # Check 3: run wrapper exists
   local wrapper="$app_dir/run"
   if [[ ! -f "$wrapper" ]]; then
     print_check warn "run wrapper missing (fix: appi refresh $id)"
@@ -2034,7 +1971,6 @@ cmd_fix_check_app() {
     print_check pass "run wrapper exists"
   fi
 
-  # Check 4: desktop entry exists
   local desktop_install="$HOME/.local/share/applications/$id.desktop"
   if [[ ! -f "$desktop_install" ]]; then
     print_check warn "desktop entry missing (fix: appi refresh $id)"
@@ -2043,7 +1979,6 @@ cmd_fix_check_app() {
     print_check pass "desktop entry installed"
   fi
 
-  # Check 5: AppImage is executable (only if current link is valid)
   if [[ -e "$current_link" ]]; then
     local appimage_path
     if [[ -L "$current_link" ]]; then
@@ -2059,7 +1994,6 @@ cmd_fix_check_app() {
     fi
   fi
 
-  # Check 6: extracted version in sync (if extracted exists)
   local extracted_dir="$app_dir/extracted"
   local squashfs_root="$extracted_dir/squashfs-root"
   if [[ -d "$squashfs_root" ]]; then
@@ -2083,7 +2017,6 @@ cmd_fix_check_app() {
     fi
   fi
 
-  # Check 7: chrome-sandbox marker orphan (marker exists but no extracted dir)
   if has_chrome_sandbox_fix "$app_dir" && [[ ! -d "$squashfs_root" ]]; then
     print_check warn "chrome-sandbox marker orphan (fix: appi fix $id --revert)"
     (( CHECK_WARNINGS++ ))
@@ -2097,7 +2030,6 @@ cmd_fix() {
   local check=0
   local id=""
 
-  # Parse all arguments (options can come before or after APP_ID)
   local -a args=("$@")
   for arg in "${args[@]}"; do
     case "$arg" in
@@ -2119,13 +2051,11 @@ cmd_fix() {
     esac
   done
 
-  # Check mutual exclusivity
   local mode_count=$((chrome_sandbox + extract + revert + check))
   if (( mode_count > 1 )); then
     die "--check, --extract, --chrome-sandbox, and --revert are mutually exclusive"
   fi
 
-  # Handle --check mode
   if (( check )); then
     log "Checking installed apps..."
     log ""
@@ -2139,7 +2069,6 @@ cmd_fix() {
     CHECK_WARNINGS=0
 
     if [[ -n "$id" ]]; then
-      # Check specific app
       id="$(normalize_app_id "$id")"
       local app_dir="$ROOT/$id"
       [[ -d "$app_dir" ]] || die "not installed: $id"
@@ -2149,7 +2078,6 @@ cmd_fix() {
       total_errors=$CHECK_ERRORS
       total_warnings=$CHECK_WARNINGS
     else
-      # Check all apps
       [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
 
       for d in "$ROOT"/*; do
@@ -2171,7 +2099,6 @@ cmd_fix() {
     return 0
   fi
 
-  # Non-check modes require APP_ID
   [[ -n "$id" ]] || die "fix requires APP_ID (or use --check for health checks)"
   id="$(normalize_app_id "$id")"
 
@@ -2197,7 +2124,6 @@ cmd_fix() {
   local current_path="$app_dir/current"
   [[ -e "$current_path" ]] || die "missing current for: $id"
 
-  # Resolve symlink to actual AppImage
   local appimage_path
   if [[ -L "$current_path" ]]; then
     appimage_path="$(readlink -f "$current_path")"
@@ -2215,7 +2141,6 @@ cmd_fix() {
   fi
 
   if (( chrome_sandbox )); then
-    # Check userns support first
     log "Checking unprivileged user namespaces support..."
     if check_userns_support; then
       warn "Unprivileged user namespaces are available on this system."
@@ -2240,9 +2165,7 @@ cmd_fix() {
         fi
       fi
     else
-      # userns is disabled - show guidance
       if print_userns_guidance; then
-        # userns was successfully enabled
         log ""
         success "Unprivileged user namespaces enabled temporarily."
         log "Try running your app now. If it works, you can make it permanent"
@@ -2266,7 +2189,6 @@ cmd_fix() {
       fi
     fi
 
-    # Security warning for SUID fix
     warn "This will set SUID root on an extracted binary."
     warn "Only proceed if you trust this AppImage."
     warn "This is a privilege-escalation surface if the binary has issues."
@@ -2291,7 +2213,6 @@ cmd_fix() {
 
     apply_chrome_sandbox_fix "$app_dir" "$squashfs_root" 0
 
-    # Update wrapper and desktop file
     ensure_run_wrapper "$id"
     write_desktop_file "$id"
 
@@ -2304,7 +2225,6 @@ cmd_fix() {
     extract_appimage "$app_dir" "$appimage_path" "$appimage_checksum" "$appimage_basename"
     local extracted_dir="$app_dir/extracted"
 
-    # Update wrapper and desktop file
     ensure_run_wrapper "$id"
     write_desktop_file "$id"
 
@@ -2343,9 +2263,7 @@ cmd_uninstall() {
   if (( purge )); then
     if [[ -d "$app_dir" ]]; then
       if (( !no_prompt )) && (( !DRY_RUN )); then
-        # Always prompt to stderr for visibility, check TTY for safety
         if [[ -t 0 ]] && [[ -t 2 ]]; then
-          # Write prompt to stderr, then read from terminal
           printf "Purge '%s' (delete all versions/meta/icons)? [y/N] " "$app_dir" >&2
           ans=""
           # Read from /dev/tty to ensure we're reading from the actual terminal
@@ -2357,7 +2275,6 @@ cmd_uninstall() {
           echo >&2  # Newline after input
           [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]] || { log "Not purged."; return 0; }
         else
-          # Non-interactive: skip purge for safety
           warn "Not purged (non-interactive terminal). Use --no-prompt to skip confirmation."
           return 0
         fi
@@ -2381,7 +2298,6 @@ cmd_clean() {
   if is_help_arg "$target" || is_help_arg "$version"; then command_help clean; return 0; fi
   [[ -z "${3:-}" ]] || die "clean accepts at most APP_ID and optional VERSION"
 
-  # If first arg looks like an option, treat as no app_id
   if [[ "${target:-}" =~ ^-- ]]; then
     target=""
   fi
@@ -2399,17 +2315,13 @@ cmd_clean() {
     local current_link="$app_dir/current"
     [[ -e "$current_link" || -L "$current_link" ]] || die "missing current for: $id"
 
-    # Resolve current symlink to find the actual version file
     local current_version=""
     if [[ -L "$current_link" ]]; then
-      # Resolve relative symlink
       local link_target
       link_target="$(readlink "$current_link")"
       if [[ "$link_target" =~ ^versions/ ]]; then
-        # Relative path like "versions/file.AppImage"
         current_version="$app_dir/$link_target"
       else
-        # Absolute path
         current_version="$(readlink -f "$current_link")"
       fi
     else
@@ -2425,7 +2337,6 @@ cmd_clean() {
     [[ -d "$versions_dir" ]] || { log "No versions directory for: $id"; return 0; }
 
     if [[ -n "$version" ]]; then
-      # Remove a specific version (exact or unique partial match)
       local -a matches=()
       while IFS= read -r -d '' f; do
         local base
@@ -2462,7 +2373,6 @@ cmd_clean() {
 
     local removed=0
 
-    # Remove all files in versions/ except the current one
     while IFS= read -r -d '' f; do
       local f_basename
       f_basename="$(basename "$f")"
@@ -2482,7 +2392,6 @@ cmd_clean() {
     return 0
   fi
 
-  # Clean all apps
   [[ -d "$ROOT" ]] || { log "Nothing to clean (no root dir): $ROOT"; return 0; }
 
   local any=0
@@ -2503,7 +2412,6 @@ cmd_size() {
   if is_help_arg "$target"; then command_help size; return 0; fi
   [[ -z "${2:-}" ]] || die "size accepts at most APP_ID"
 
-  # Helper to get human-readable size
   get_dir_size() {
     local path="$1"
     if [[ -d "$path" ]]; then
@@ -2515,7 +2423,6 @@ cmd_size() {
     fi
   }
 
-  # Helper to count files in directory
   count_files() {
     local path="$1"
     if [[ -d "$path" ]]; then
@@ -2525,7 +2432,6 @@ cmd_size() {
     fi
   }
 
-  # Helper to calculate cleanable size (non-current versions)
   get_cleanable_size() {
     local app_dir="$1"
     local versions_dir="$app_dir/versions"
@@ -2553,7 +2459,6 @@ cmd_size() {
       fi
     done < <(find "$versions_dir" -type f \( -name "*.AppImage" -o -name "*.appimage" \) -print0 2>/dev/null || true)
 
-    # Convert to human-readable
     if (( total_bytes == 0 )); then
       echo "0B"
     elif (( total_bytes < 1024 )); then
@@ -2568,7 +2473,6 @@ cmd_size() {
   }
 
   if [[ -n "$target" ]]; then
-    # Single app detailed view
     local id
     id="$(normalize_app_id "$target")"
     local app_dir="$ROOT/$id"
@@ -2605,7 +2509,6 @@ cmd_size() {
     printf "%-20s %s\n" "Total:" "$total_size"
 
     log ""
-    # Show current version
     local current_link="$app_dir/current"
     if [[ -L "$current_link" ]]; then
       local link_target
@@ -2624,7 +2527,6 @@ cmd_size() {
     return 0
   fi
 
-  # All apps overview
   [[ -d "$ROOT" ]] || { log "No apps root: $ROOT"; return 0; }
 
   log "Disk usage for installed apps:"
@@ -2645,12 +2547,10 @@ cmd_size() {
     local size
     size="$(get_dir_size "$d")"
 
-    # Get size in bytes for total
     local size_bytes
     size_bytes="$(du -sb "$d" 2>/dev/null | cut -f1 || echo 0)"
     total_bytes=$((total_bytes + size_bytes))
 
-    # Get current version name
     local current_name=""
     if [[ -L "$d/current" ]]; then
       local link_target
@@ -2662,7 +2562,6 @@ cmd_size() {
 
     printf "%-20s %-8s %s\n" "$id" "$size" "$current_name"
 
-    # Calculate cleanable for this app
     local versions_dir="$d/versions"
     if [[ -d "$versions_dir" ]]; then
       while IFS= read -r -d '' f; do
@@ -2683,7 +2582,6 @@ cmd_size() {
   fi
 
   log ""
-  # Convert total to human-readable
   local total_human
   if (( total_bytes < 1024 )); then
     total_human="${total_bytes}B"
@@ -2692,12 +2590,10 @@ cmd_size() {
   elif (( total_bytes < 1073741824 )); then
     total_human="$((total_bytes / 1048576))M"
   else
-    # Use awk for decimal precision with GB
     total_human="$(awk "BEGIN {printf \"%.1fG\", $total_bytes / 1073741824}")"
   fi
   log "Total: $total_human"
 
-  # Convert cleanable to human-readable
   local cleanable_human
   if (( total_cleanable_bytes == 0 )); then
     cleanable_human="0B"
@@ -2719,21 +2615,17 @@ cmd_size() {
 }
 
 cmd_update_self() {
-  # Simple path resolution - just use $0 and make it absolute if needed
   local script_path="$0"
   local full_script_path=""
 
-  # If $0 is relative, make it absolute using current directory
   if [[ "$script_path" != /* ]]; then
     local cwd
     cwd="$(pwd)"
     full_script_path="$cwd/$script_path"
   else
-    # Already absolute
     full_script_path="$script_path"
   fi
 
-  # Try readlink -f to resolve symlinks if available
   if command -v readlink >/dev/null 2>&1; then
     local resolved
     resolved="$(readlink -f "$full_script_path" 2>/dev/null || true)"
@@ -2742,20 +2634,16 @@ cmd_update_self() {
     fi
   fi
 
-  # Verify the script file exists
   if [[ ! -f "$full_script_path" ]]; then
     die "Script file not found: $full_script_path"
   fi
 
-  # Check writability only if not dry-run
   if (( !DRY_RUN )) && [[ ! -w "$full_script_path" ]]; then
     die "Script file is not writable: $full_script_path (may need sudo or chmod)"
   fi
 
-  # GitHub raw URL (same as README)
   local github_url="https://raw.githubusercontent.com/RavioliSauce/appi/refs/heads/main/appi.sh"
 
-  # Check if curl or wget is available
   local -a download_cmd=()
   if have_cmd curl; then
     download_cmd=(curl -fSL)
@@ -2776,11 +2664,9 @@ cmd_update_self() {
     return 0
   fi
 
-  # Download to temporary file
   local tmp_file
   tmp_file="$(mktemp)" || die "Failed to create temporary file"
 
-  # Cleanup on exit
   APPI_UPDATE_TMP_FILE="$tmp_file"
   trap 'rm -f "${APPI_UPDATE_TMP_FILE:-}"' EXIT
 
@@ -2791,15 +2677,12 @@ cmd_update_self() {
     die "Failed to download update from GitHub"
   fi
 
-  # Verify it's a valid bash script (basic check)
   if ! head -n 1 "$tmp_file" | grep -q "^#!/usr/bin/env bash"; then
     die "Downloaded file does not appear to be a valid bash script"
   fi
 
-  # Preserve executable permissions
   chmod +x "$tmp_file"
 
-  # Get new version for comparison
   local new_version
   new_version="$(grep -m1 "^VERSION=" "$tmp_file" 2>/dev/null | cut -d'"' -f2 || echo "unknown")"
 
@@ -2824,7 +2707,6 @@ cmd_update_self() {
     vlog "Update checksum verified: $new_sha"
   fi
 
-  # Replace the script atomically
   if ! mv -f "$tmp_file" "$full_script_path"; then
     die "Failed to replace script (may need write permissions)"
   fi
@@ -2852,7 +2734,6 @@ cmd_update_app() {
   local download_url=""
   local update_script="$app_dir/meta/update.sh"
 
-  # 1. Try user-provided update script
   if [[ -x "$update_script" ]]; then
     vlog "Running update script: $update_script"
     download_url="$("$update_script" 2>&1)" || die "Update script failed for $id"
@@ -2862,7 +2743,6 @@ cmd_update_app() {
     fi
     vlog "Update script returned: $download_url"
   else
-    # 2. Try stored source URL
     local source_url
     source_url="$(read_source_url "$app_dir" 2>/dev/null || true)"
 
@@ -2872,24 +2752,20 @@ cmd_update_app() {
 
     vlog "Source URL: $source_url"
 
-    # 3. Check if it's a GitHub URL
     if is_github_url "$source_url"; then
       log "Fetching latest release from GitHub..."
       download_url="$(get_github_latest_appimage "$source_url")"
       vlog "GitHub latest: $download_url"
     else
-      # 4. Use source URL directly (may be a "latest" URL or static)
       download_url="$source_url"
       vlog "Using direct URL: $download_url"
     fi
   fi
 
-  # Validate URL
   if ! is_url "$download_url"; then
     die "Invalid download URL: $download_url"
   fi
 
-  # Get current version checksum for comparison
   local current_path="$app_dir/current"
   local current_checksum=""
   if [[ -e "$current_path" ]]; then
@@ -2905,15 +2781,12 @@ cmd_update_app() {
     fi
   fi
 
-  # Download to temporary file
   local tmp_file
   tmp_file="$(mktemp)" || die "Failed to create temporary file"
 
-  # Cleanup on exit
   local cleanup_file="$tmp_file"
   trap 'rm -f "$cleanup_file"' EXIT
 
-  # Infer filename from URL
   local url_filename
   url_filename="$(basename "${download_url%%\?*}")"
   if [[ "$url_filename" == *.AppImage || "$url_filename" == *.appimage ]]; then
@@ -2939,7 +2812,6 @@ cmd_update_app() {
   download_file "$download_url" "$tmp_file"
   chmod +x "$tmp_file"
 
-  # Compare checksums
   local new_checksum
   new_checksum="$(compute_checksum "$tmp_file")"
   vlog "New checksum: $new_checksum"
@@ -2951,13 +2823,10 @@ cmd_update_app() {
     return 0
   fi
 
-  # Install the new version using existing install logic
   log "Installing update for $id..."
 
-  # Clear trap before calling install (it manages its own cleanup)
   trap - EXIT
 
-  # Call install with the downloaded file
   cmd_install "$tmp_file" --id "$id" --move
 
   success "Updated: $id"
@@ -2969,7 +2838,6 @@ cmd_update() {
   local force=0
   local app_id=""
 
-  # Parse arguments
   while (( $# )); do
     case "$1" in
       -h|--help) command_help update; return 0 ;;
@@ -2990,7 +2858,6 @@ cmd_update() {
     shift || true
   done
 
-  # Dispatch based on arguments
   if (( do_self )); then
     if [[ -n "$app_id" ]] || (( do_all )); then
       die "--self cannot be combined with APP_ID or --all"
@@ -3015,7 +2882,6 @@ cmd_update() {
       id="$(basename "$d")"
       [[ -e "$d/current" ]] || continue
 
-      # Check if app has an update source
       local has_source=0
       if [[ -x "$d/meta/update.sh" ]]; then
         has_source=1
@@ -3053,7 +2919,6 @@ cmd_update() {
     return 0
   fi
 
-  # No arguments - show usage hint
   die "update requires APP_ID, --self, or --all (try: $PROG update --help)"
 }
 
@@ -3065,13 +2930,11 @@ cmd_version() {
 
 # ---------- global arg parsing + dispatch ----------
 
-# Parse global options with positional shifts
 ARGS=("$@")
-# Check for --no-color early (before usage() might be called)
 for arg in "${ARGS[@]}"; do
   [[ "$arg" == "--no-color" ]] && NO_COLOR_FLAG=1 && break
 done
-# parse globals with manual shift
+
 i=0
 while (( i < ${#ARGS[@]} )); do
   case "${ARGS[$i]}" in
@@ -3086,11 +2949,9 @@ while (( i < ${#ARGS[@]} )); do
   esac
   i=$((i+1))
 done
-# slice remaining
 REMAIN=("${ARGS[@]:$i}")
 [[ "${ROOT}" == "~"* ]] && ROOT="${ROOT/#\~/$HOME}"
 
-# Initialize color support after parsing --no-color flag
 init_color
 
 cmd="${REMAIN[0]:-}"
